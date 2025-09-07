@@ -5,250 +5,379 @@ import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
 
-// Normaliza: si Supabase trae el join como array, coge el primero; si viene como objeto, devuélvelo tal cual.
+// ========================= Helpers & tipos =========================
+
+// Si el join viene como array, devolvemos el primero; si viene como objeto/null, lo normalizamos.
 function one<T>(x: T | T[] | null | undefined): T | undefined {
-  return Array.isArray(x) ? x[0] : (x ?? undefined);
+  return Array.isArray(x) ? x[0] : (x ?? undefined)
 }
 
-type Counterparty = { id: string; legal_name?: string; nick?: string; logo_url?: string };
+type Counterparty = { id: string; legal_name?: string; nick?: string; logo_url?: string }
+type GroupCompany = { id: string; nick?: string; name?: string; logo_url?: string }
 
 export const dynamic = 'force-dynamic'
 
-function companyLabel(c: any) { return c?.nick || c?.name }
+function companyLabel(c: Pick<GroupCompany, 'nick' | 'name'> | undefined) {
+  return c?.nick || c?.name || ''
+}
+
+// ========================= Página =========================
 
 export default async function ActivityDetail({ params }: { params: { activityId: string } }) {
   const s = createSupabaseServer()
 
+  // Datos de la actividad
   const { data: a } = await s
     .from('activities')
-    .select('id, artist_id, type, status, date, time, municipality, province, country, capacity, pay_kind, tags, venues(id,name,photo_url,address), group_companies(id,nick,name,logo_url)')
-    .eq('id', params.activityId).single()
+    .select(
+      [
+        'id',
+        'artist_id',
+        'type',
+        'status',
+        'date',
+        'time',
+        'municipality',
+        'province',
+        'country',
+        'capacity',
+        'pay_kind',
+        'tags',
+        'venues(id,name,photo_url,address)',
+        'group_companies(id,nick,name,logo_url)',
+      ].join(',')
+    )
+    .eq('id', params.activityId)
+    .single()
 
   if (!a) throw new Error('Actividad no encontrada')
 
+  // Artista
   const { data: artist } = await s.from('artists').select('id, stage_name').eq('id', a.artist_id).single()
 
+  // Empresas del grupo (para el selector)
+  const { data: companies } = await s
+    .from('group_companies')
+    .select('id, nick, name, logo_url')
+    .order('name', { ascending: true })
+
+  // Promotor vinculado
   const { data: promoterLink } = await s
     .from('activity_promoters')
     .select('id, counterparty_id, counterparties(id,legal_name,nick,logo_url)')
-    .eq('activity_id', a.id).maybeSingle()
+    .eq('activity_id', a.id)
+    .maybeSingle()
 
+  // Módulos
   const { data: incomes } = await s.from('activity_incomes').select('*').eq('activity_id', a.id).order('created_at')
-  const { data: agents } = await s.from('activity_zone_agents').select('id, counterparty_id, commission_type, commission_pct, commission_base, commission_amount, counterparties(id,legal_name,nick)').eq('activity_id', a.id)
+  const { data: agents } = await s
+    .from('activity_zone_agents')
+    .select('id, counterparty_id, commission_type, commission_pct, commission_base, commission_amount, counterparties(id,legal_name,nick,logo_url)')
+    .eq('activity_id', a.id)
+
   const { data: equip } = await s.from('activity_equipment').select('*').eq('activity_id', a.id).maybeSingle()
   const { data: descr } = await s.from('activity_description').select('*').eq('activity_id', a.id).maybeSingle()
   const { data: costs } = await s.from('activity_promoter_costs').select('*').eq('activity_id', a.id)
   const { data: bills } = await s.from('activity_billing_requests').select('*').eq('activity_id', a.id).order('created_at')
   const { data: locals } = await s.from('activity_local_productions').select('*').eq('activity_id', a.id)
   const { data: tech } = await s.from('activity_tech').select('*').eq('activity_id', a.id).maybeSingle()
-  const { data: partners } = await s.from('activity_partners').select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick)').eq('activity_id', a.id)
+  const { data: partners } = await s
+    .from('activity_partners')
+    .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick,logo_url)')
+    .eq('activity_id', a.id)
 
-  // ---------- Actions ----------
+  // Normalizados para lectura sencilla
+  const gc = one<GroupCompany>(a.group_companies as any)
+  const promoterCP = one<Counterparty>(promoterLink?.counterparties as any)
+
+  // ========================= Server Actions =========================
+
   async function saveBasics(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const status = String(formData.get('status')||'draft') as any
-    const date = String(formData.get('date')||'') || null
-    const time = String(formData.get('time')||'') || null
-    const municipality = String(formData.get('municipality')||'').trim() || null
-    const province = String(formData.get('province')||'').trim() || null
-    const country = String(formData.get('country')||'España').trim()
-    const capacity = formData.get('capacity') ? Number(formData.get('capacity')) : null
-    const pay_kind = String(formData.get('pay_kind')||'pay') as any
+    const status = String(formData.get('status') || 'draft') as any
+    const date = String(formData.get('date') || '') || null
+    const time = String(formData.get('time') || '') || null
+    const municipality = String(formData.get('municipality') || '').trim() || null
+    const province = String(formData.get('province') || '').trim() || null
+    const country = String(formData.get('country') || 'España').trim()
+    const capacityRaw = formData.get('capacity')
+    const capacity = capacityRaw ? Number(capacityRaw) : null
+    const pay_kind = String(formData.get('pay_kind') || 'pay') as any
 
-    const { error } = await s.from('activities').update({ status, date, time, municipality, province, country, capacity, pay_kind }).eq('id', params.activityId)
+    const { error } = await s
+      .from('activities')
+      .update({ status, date, time, municipality, province, country, capacity, pay_kind })
+      .eq('id', params.activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function setCompany(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const company_id = String(formData.get('company_id')||'') || null
+    const value = String(formData.get('company_id') || '')
+    const company_id = value || null
     const { error } = await s.from('activities').update({ company_id }).eq('id', params.activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function attachPromoter(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const mode = String(formData.get('mode')||'existing')
-    let counterparty_id = String(formData.get('counterparty_id')||'')
+    const mode = String(formData.get('mode') || 'existing')
+    let counterparty_id = String(formData.get('counterparty_id') || '')
+
     if (mode !== 'existing' && !counterparty_id) {
-      const legal_name = String(formData.get('legal_name')||'').trim()
-      const is_company = String(formData.get('kind')||'') === 'company'
-      const tax_id = String(formData.get('tax_id')||'').trim() || null
+      const legal_name = String(formData.get('legal_name') || '').trim()
+      const is_company = String(formData.get('kind') || '') === 'company'
+      const tax_id = String(formData.get('tax_id') || '').trim() || null
       if (!legal_name) throw new Error('Nombre requerido')
-      const ins = await s.from('counterparties').insert({ organization_id: (await s.from('organizations').select('id').limit(1).single()).data!.id, legal_name, is_company, tax_id, as_third_party: true }).select('id').single()
+
+      const org = await s.from('organizations').select('id').limit(1).single()
+      if (org.error) throw new Error(org.error.message)
+
+      const ins = await s
+        .from('counterparties')
+        .insert({ organization_id: org.data.id, legal_name, is_company, tax_id, as_third_party: true })
+        .select('id')
+        .single()
       if (ins.error) throw new Error(ins.error.message)
       counterparty_id = ins.data.id
     }
+
     const del = await s.from('activity_promoters').delete().eq('activity_id', params.activityId)
     if (del.error) throw new Error(del.error.message)
+
     const { error } = await s.from('activity_promoters').insert({ activity_id: params.activityId, counterparty_id })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addIncome(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const kind = String(formData.get('kind')||'fixed') as any
-    const label = String(formData.get('label')||'').trim() || null
+    const kind = String(formData.get('kind') || 'fixed') as any
+    const label = String(formData.get('label') || '').trim() || null
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
     const percent = formData.get('percent') ? Number(formData.get('percent')) : null
-    const base = String(formData.get('base')||'gross') as any
+    const base = String(formData.get('base') || 'gross') as any
     const rule_from_tickets = formData.get('from_tickets') ? Number(formData.get('from_tickets')) : null
-    const { error } = await s.from('activity_incomes').insert({ activity_id: params.activityId, kind, label, amount, percent, base, rule_from_tickets })
+
+    const { error } = await s
+      .from('activity_incomes')
+      .insert({ activity_id: params.activityId, kind, label, amount, percent, base, rule_from_tickets })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addAgent(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const mode = String(formData.get('mode')||'existing')
-    let counterparty_id = String(formData.get('counterparty_id')||'')
+    const mode = String(formData.get('mode') || 'existing')
+    let counterparty_id = String(formData.get('counterparty_id') || '')
+
     if (mode !== 'existing' && !counterparty_id) {
-      const legal_name = String(formData.get('legal_name')||'').trim()
-      const is_company = String(formData.get('kind')||'') === 'company'
+      const legal_name = String(formData.get('legal_name') || '').trim()
+      const is_company = String(formData.get('kind') || '') === 'company'
       if (!legal_name) throw new Error('Nombre requerido')
-      const ins = await s.from('counterparties').insert({ organization_id: (await s.from('organizations').select('id').limit(1).single()).data!.id, legal_name, is_company, as_third_party: true }).select('id').single()
+
+      const org = await s.from('organizations').select('id').limit(1).single()
+      if (org.error) throw new Error(org.error.message)
+
+      const ins = await s
+        .from('counterparties')
+        .insert({ organization_id: org.data.id, legal_name, is_company, as_third_party: true })
+        .select('id')
+        .single()
       if (ins.error) throw new Error(ins.error.message)
+
       counterparty_id = ins.data.id
     }
-    const commission_type = String(formData.get('commission_type')||'percent') as any
+
+    const commission_type = String(formData.get('commission_type') || 'percent') as any
     const commission_pct = formData.get('commission_pct') ? Number(formData.get('commission_pct')) : null
-    const commission_base = String(formData.get('commission_base')||'fixed') as any
+    const commission_base = String(formData.get('commission_base') || 'gross') as any
     const commission_amount = formData.get('commission_amount') ? Number(formData.get('commission_amount')) : null
-    const { error } = await s.from('activity_zone_agents').insert({ activity_id: params.activityId, counterparty_id, commission_type, commission_pct, commission_base, commission_amount })
+
+    const { error } = await s
+      .from('activity_zone_agents')
+      .insert({ activity_id: params.activityId, counterparty_id, commission_type, commission_pct, commission_base, commission_amount })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function saveEquipment(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const mode = String(formData.get('mode')||'included') as any
-    const extra_party = String(formData.get('extra_party')||'') || null
+    const mode = String(formData.get('mode') || 'included') as any
+    const extra_party = String(formData.get('extra_party') || '') || null
     let rider_pdf_url: string | null = null
+
     const rider = formData.get('rider_pdf') as File | null
-    if (rider && rider.size>0) {
+    if (rider && rider.size > 0) {
       await ensurePublicBucket('contracts')
-      const up = await s.storage.from('contracts').upload(`activities/${params.activityId}/rider_${crypto.randomUUID()}.pdf`, rider, { cacheControl: '3600', upsert: false, contentType: 'application/pdf' })
+      const up = await s.storage
+        .from('contracts')
+        .upload(`activities/${params.activityId}/rider_${crypto.randomUUID()}.pdf`, rider, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: 'application/pdf',
+        })
       if (up.error) throw new Error(up.error.message)
       rider_pdf_url = s.storage.from('contracts').getPublicUrl(up.data.path).data.publicUrl
     }
+
     const exists = await s.from('activity_equipment').select('id').eq('activity_id', params.activityId).maybeSingle()
     if (exists.data) {
-      const { error } = await s.from('activity_equipment').update({ mode, extra_party, ...(rider_pdf_url ? { rider_pdf_url } : {}) }).eq('activity_id', params.activityId)
+      const { error } = await s
+        .from('activity_equipment')
+        .update({ mode, extra_party, ...(rider_pdf_url ? { rider_pdf_url } : {}) })
+        .eq('activity_id', params.activityId)
       if (error) throw new Error(error.message)
     } else {
-      const { error } = await s.from('activity_equipment').insert({ activity_id: params.activityId, mode, extra_party, rider_pdf_url })
+      const { error } = await s
+        .from('activity_equipment')
+        .insert({ activity_id: params.activityId, mode, extra_party, rider_pdf_url })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function saveDescr(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const formation = String(formData.get('formation')||'full') as any
-    const reduced_notes = String(formData.get('reduced_notes')||'').trim() || null
+    const formation = String(formData.get('formation') || 'full') as any
+    const reduced_notes = String(formData.get('reduced_notes') || '').trim() || null
     const show_duration = formData.get('show_duration') ? Number(formData.get('show_duration')) : null
+
     const exists = await s.from('activity_description').select('id').eq('activity_id', params.activityId).maybeSingle()
     if (exists.data) {
-      const { error } = await s.from('activity_description').update({ formation, reduced_notes, show_duration }).eq('activity_id', params.activityId)
+      const { error } = await s
+        .from('activity_description')
+        .update({ formation, reduced_notes, show_duration })
+        .eq('activity_id', params.activityId)
       if (error) throw new Error(error.message)
     } else {
-      const { error } = await s.from('activity_description').insert({ activity_id: params.activityId, formation, reduced_notes, show_duration })
+      const { error } = await s
+        .from('activity_description')
+        .insert({ activity_id: params.activityId, formation, reduced_notes, show_duration })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addPromoterCost(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const category = String(formData.get('category')||'lodging') as any
-    const details = String(formData.get('details')||'').trim() || null
-    const coverage = String(formData.get('coverage')||'all') as any
+    const category = String(formData.get('category') || 'lodging') as any
+    const details = String(formData.get('details') || '').trim() || null
+    const coverage = String(formData.get('coverage') || 'all') as any
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
     const promoter_handles = formData.get('promoter_handles') === 'on'
     const refacturable = formData.get('refacturable') === 'on'
-    const { error } = await s.from('activity_promoter_costs').insert({ activity_id: params.activityId, category, details, coverage, amount, promoter_handles, refacturable })
+
+    const { error } = await s
+      .from('activity_promoter_costs')
+      .insert({ activity_id: params.activityId, category, details, coverage, amount, promoter_handles, refacturable })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addBilling(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const direction = String(formData.get('direction')||'issued') as any
-    const concept = String(formData.get('concept')||'other') as any
+    const direction = String(formData.get('direction') || 'issued') as any
+    const concept = String(formData.get('concept') || 'other') as any
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
-    const due_rule = String(formData.get('due_rule')||'date') as any
-    const due_date = String(formData.get('due_date') || '') || null;
-    let counterparty_id = String(formData.get('counterparty_id') || '') || null;
-    
-    // promoterLink.counterparties puede venir como objeto o como array [{...}]
-    const cp = one<Counterparty>(promoterLink?.counterparties as any);
-    if (!counterparty_id && cp?.id) {
-      counterparty_id = cp.id;
-    }
-    const { error } = await s.from('activity_billing_requests').insert({ activity_id: params.activityId, direction, concept, amount, due_rule, due_date, counterparty_id })
+    const due_rule = String(formData.get('due_rule') || 'date') as any
+    const due_date = String(formData.get('due_date') || '') || null
+    let counterparty_id = String(formData.get('counterparty_id') || '') || null
+
+    const cp = one<Counterparty>(promoterLink?.counterparties as any)
+    if (!counterparty_id && cp?.id) counterparty_id = cp.id
+
+    const { error } = await s
+      .from('activity_billing_requests')
+      .insert({ activity_id: params.activityId, direction, concept, amount, due_rule, due_date, counterparty_id })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addLocalProduction(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const provider_id = String(formData.get('provider_id')||'')
+    const provider_id = String(formData.get('provider_id') || '')
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
-    const details = String(formData.get('details')||'').trim() || null
-    const resp_name = String(formData.get('resp_name')||'').trim() || null
-    const resp_phone = String(formData.get('resp_phone')||'').trim() || null
-    const resp_email = String(formData.get('resp_email')||'').trim() || null
-    const { error } = await s.from('activity_local_productions').insert({ activity_id: params.activityId, provider_id, amount, details, resp_name, resp_phone, resp_email })
+    const details = String(formData.get('details') || '').trim() || null
+    const resp_name = String(formData.get('resp_name') || '').trim() || null
+    const resp_phone = String(formData.get('resp_phone') || '').trim() || null
+    const resp_email = String(formData.get('resp_email') || '').trim() || null
+
+    const { error } = await s
+      .from('activity_local_productions')
+      .insert({ activity_id: params.activityId, provider_id, amount, details, resp_name, resp_phone, resp_email })
     if (error) throw new Error(error.message)
-    // solicitud de factura (recibida) automática
-    await s.from('activity_billing_requests').insert({ activity_id: params.activityId, direction: 'received', concept: 'local_production', amount, due_rule: 'date', counterparty_id: provider_id })
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    // También generamos la solicitud de factura (recibida) asociada
+    await s
+      .from('activity_billing_requests')
+      .insert({ activity_id: params.activityId, direction: 'received', concept: 'local_production', amount, due_rule: 'date', counterparty_id: provider_id })
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function saveTech(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const tech_resp_name = String(formData.get('tech_resp_name')||'').trim() || null
-    const tech_resp_phone = String(formData.get('tech_resp_phone')||'').trim() || null
-    const tech_resp_email = String(formData.get('tech_resp_email')||'').trim() || null
-    const sound_company = String(formData.get('sound_company')||'').trim() || null
-    const sound_contact = String(formData.get('sound_contact')||'').trim() || null
-    const sound_phone = String(formData.get('sound_phone')||'').trim() || null
-    const sound_email = String(formData.get('sound_email')||'').trim() || null
+    const tech_resp_name = String(formData.get('tech_resp_name') || '').trim() || null
+    const tech_resp_phone = String(formData.get('tech_resp_phone') || '').trim() || null
+    const tech_resp_email = String(formData.get('tech_resp_email') || '').trim() || null
+    const sound_company = String(formData.get('sound_company') || '').trim() || null
+    const sound_contact = String(formData.get('sound_contact') || '').trim() || null
+    const sound_phone = String(formData.get('sound_phone') || '').trim() || null
+    const sound_email = String(formData.get('sound_email') || '').trim() || null
+
     const exists = await s.from('activity_tech').select('id').eq('activity_id', params.activityId).maybeSingle()
     if (exists.data) {
-      const { error } = await s.from('activity_tech').update({ tech_resp_name, tech_resp_phone, tech_resp_email, sound_company, sound_contact, sound_phone, sound_email }).eq('activity_id', params.activityId)
+      const { error } = await s
+        .from('activity_tech')
+        .update({ tech_resp_name, tech_resp_phone, tech_resp_email, sound_company, sound_contact, sound_phone, sound_email })
+        .eq('activity_id', params.activityId)
       if (error) throw new Error(error.message)
     } else {
-      const { error } = await s.from('activity_tech').insert({ activity_id: params.activityId, tech_resp_name, tech_resp_phone, tech_resp_email, sound_company, sound_contact, sound_phone, sound_email })
+      const { error } = await s
+        .from('activity_tech')
+        .insert({ activity_id: params.activityId, tech_resp_name, tech_resp_phone, tech_resp_email, sound_company, sound_contact, sound_phone, sound_email })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
   async function addPartner(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const counterparty_id = String(formData.get('counterparty_id')||'')
+    const counterparty_id = String(formData.get('counterparty_id') || '')
     const pct = formData.get('pct') ? Number(formData.get('pct')) : null
-    const base_on = String(formData.get('base_on')||'gross') as any
+    const base_on = String(formData.get('base_on') || 'gross') as any
+
     const { error } = await s.from('activity_partners').insert({ activity_id: params.activityId, counterparty_id, pct, base_on })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/${params.activityId}`)
+
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
+
+  // ========================= Render =========================
 
   return (
     <div className="space-y-6">
@@ -261,11 +390,12 @@ export default async function ActivityDetail({ params }: { params: { activityId:
             <Link href={`/artistas/${artist?.id}`} className="underline">Ir a la ficha del artista</Link>
           </div>
         </div>
-        <Link href={`/actividades/${a.artist_id}`} className="btn-secondary">Volver</Link>
+        <Link href={`/actividades/artista/${a.artist_id}`} className="btn-secondary">Volver</Link>
       </div>
 
       {/* DATOS BÁSICOS */}
       <ModuleCard title="Datos básicos" leftActions={<span className="badge">Editar</span>}>
+        {/* Form 1: básicos */}
         <form action={saveBasics} className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
             <label className="block text-sm mb-1">Estado</label>
@@ -296,19 +426,34 @@ export default async function ActivityDetail({ params }: { params: { activityId:
               <option value="free">Gratuito</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm mb-1">Empresa del grupo</label>
-            <form action={setCompany}>
-              <select name="company_id" defaultValue={a.group_companies?.id || ''} className="w-full border rounded px-3 py-2">
-                <option value="">(sin empresa)</option>
-                {/* server-side: listado inline */}
-                {/* eslint-disable-next-line react/jsx-key */}
-                {a.group_companies ? <option value={a.group_companies.id}>{companyLabel(a.group_companies)}</option> : null}
-              </select>
-              <button className="btn mt-2">Guardar empresa</button>
-            </form>
+          <div className="md:col-span-3">
+            <button className="btn">Guardar básicos</button>
           </div>
         </form>
+
+        {/* Form 2: empresa del grupo (NO anidar dentro del form anterior) */}
+        <div className="mt-4 border-t pt-4">
+          <form action={setCompany} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-sm mb-1">Empresa del grupo</label>
+              <select
+                name="company_id"
+                defaultValue={gc?.id ?? ''}
+                className="w-full border rounded px-3 py-2"
+              >
+                <option value="">(sin empresa)</option>
+                {(companies || []).map(c => (
+                  <option key={c.id} value={c.id}>
+                    {companyLabel(c)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2 flex items-end">
+              <button className="btn">Guardar empresa</button>
+            </div>
+          </form>
+        </div>
       </ModuleCard>
 
       {/* PROMOTOR */}
@@ -319,12 +464,12 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           <div className="mt-2"><button className="btn">Vincular promotor</button></div>
         </form>
 
-        {promoterLink?.counterparties?.id && (
+        {promoterCP?.id && (
           <div className="mt-3 flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={promoterLink.counterparties.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
-            <Link href={`/terceros/${promoterLink.counterparties.id}`} className="underline font-medium">
-              {promoterLink.counterparties.nick || promoterLink.counterparties.legal_name}
+            <img src={promoterCP.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
+            <Link href={`/terceros/${promoterCP.id}`} className="underline font-medium">
+              {promoterCP.nick || promoterCP.legal_name}
             </Link>
           </div>
         )}
@@ -344,7 +489,11 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           </div>
           <div><label className="block text-sm mb-1">Etiqueta (opcional)</label><input name="label" className="w-full border rounded px-2 py-1" /></div>
           <div><label className="block text-sm mb-1">Importe</label><input name="amount" type="number" step="0.01" className="w-full border rounded px-2 py-1" /></div>
-          <div><label className="block text-sm mb-1">% / tickets desde</label><input name="percent" type="number" step="0.01" className="w-full border rounded px-2 py-1" placeholder="%"/> <input name="from_tickets" type="number" className="w-full border rounded px-2 py-1 mt-1" placeholder="desde entradas"/></div>
+          <div>
+            <label className="block text-sm mb-1">% / tickets desde</label>
+            <input name="percent" type="number" step="0.01" className="w-full border rounded px-2 py-1" placeholder="%" />
+            <input name="from_tickets" type="number" className="w-full border rounded px-2 py-1 mt-1" placeholder="desde entradas" />
+          </div>
           <div className="md:col-span-4">
             <label className="block text-sm mb-1">Base</label>
             <select name="base" className="w-full border rounded px-2 py-1" defaultValue="gross">
@@ -391,11 +540,16 @@ export default async function ActivityDetail({ params }: { params: { activityId:
         </form>
 
         <div className="mt-3 text-sm">
-          {(agents || []).map(a => (
-            <div key={a.id} className="py-1">
-              {a.counterparties?.nick || a.counterparties?.legal_name} · {a.commission_type === 'fixed' ? `${a.commission_amount?.toLocaleString('es-ES',{style:'currency',currency:'EUR'})}` : `${a.commission_pct}% (${a.commission_base})`}
-            </div>
-          ))}
+          {(agents || []).map(ag => {
+            const c = one<Counterparty>(ag.counterparties as any)
+            return (
+              <div key={ag.id} className="py-1">
+                {c?.nick || c?.legal_name} · {ag.commission_type === 'fixed'
+                  ? `${ag.commission_amount?.toLocaleString('es-ES',{style:'currency',currency:'EUR'})}`
+                  : `${ag.commission_pct}% (${ag.commission_base})`}
+              </div>
+            )
+          })}
           {!agents?.length && <div className="text-gray-500">Sin agente configurado.</div>}
         </div>
       </ModuleCard>
@@ -593,11 +747,14 @@ export default async function ActivityDetail({ params }: { params: { activityId:
         </form>
 
         <div className="mt-3 text-sm divide-y divide-gray-200">
-          {(partners || []).map(p => (
-            <div key={p.id} className="py-1">
-              {p.counterparties?.nick || p.counterparties?.legal_name} · {p.pct}% · {p.base_on}
-            </div>
-          ))}
+          {(partners || []).map(p => {
+            const c = one<Counterparty>(p.counterparties as any)
+            return (
+              <div key={p.id} className="py-1">
+                {c?.nick || c?.legal_name} · {p.pct}% · {p.base_on}
+              </div>
+            )
+          })}
           {!partners?.length && <div className="text-gray-500">Sin socios.</div>}
         </div>
       </ModuleCard>
