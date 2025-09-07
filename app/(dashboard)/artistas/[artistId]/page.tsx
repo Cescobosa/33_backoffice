@@ -9,6 +9,13 @@ import { isValidIBAN } from '@/lib/iban'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+/** Lee el nombre del income type tanto si viene como objeto como si viene como array */
+function incomeTypeNameFromRow(row: any): string | undefined {
+  const it = row?.income_types
+  if (Array.isArray(it)) return it[0]?.name
+  return it?.name
+}
+
 async function getArtistFull(id: string) {
   const s = createSupabaseServer()
   const { data: artist, error } = await s
@@ -95,7 +102,6 @@ async function getLinkConfigs(linkId: string) {
 export default async function ArtistDetail({ params, searchParams }: { params: { artistId: string }, searchParams: { tab?: string } }) {
   const id = params.artistId
   const tab = searchParams.tab || 'basicos'
-  const s = createSupabaseServer()
 
   const artist = await getArtistFull(id)
   if (!artist) notFound()
@@ -109,6 +115,9 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
     getAdvances(id),
     getLinks(id)
   ])
+
+  // Pre-carga de condiciones por vínculo de terceros (evitar map async en el render)
+  const linkConfigsArr = await Promise.all(links.map(l => getLinkConfigs(l.id)))
 
   // ========== SERVER ACTIONS ==========
 
@@ -196,14 +205,12 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
     const supabase = createSupabaseServer()
     const income_type_id = String(formData.get('income_type_id') || '')
     if (!income_type_id) throw new Error('Tipo requerido')
-    // recogemos pares person_id -> %
     const entries: { pid: string, pct: number }[] = []
     formData.forEach((v, k) => {
       if (k.startsWith('share_')) {
         entries.push({ pid: k.replace('share_', ''), pct: Number(v) || 0 })
       }
     })
-    // borramos anteriores y creamos nuevas
     const { error: delErr } = await supabase.from('artist_group_shares').delete().eq('artist_id', artist.id).eq('income_type_id', income_type_id)
     if (delErr) throw new Error(delErr.message)
     const rows = entries.filter(e => e.pct > 0).map(e => ({ artist_id: artist.id, income_type_id, artist_person_id: e.pid, percentage: e.pct }))
@@ -262,7 +269,6 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
       const pub = s.storage.from('contracts').getPublicUrl(up.data.path)
       iban_certificate_url = pub.data.publicUrl
     }
-    // upsert: si ya hay fiscal identity para (owner_type, owner_id), actualiza
     const existing = await s.from('fiscal_identities').select('id').eq('owner_type', 'artist').eq('owner_id', artist.id).maybeSingle()
     if (existing.error && existing.error.code !== 'PGRST116') throw new Error(existing.error.message)
     if (existing.data) {
@@ -271,10 +277,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
       }).eq('id', existing.data.id)
       if (error) throw new Error(error.message)
     } else {
-      if (!fiscal_name || !tax_id || !fiscal_address || !iban) {
-        // permitimos dejarlo vacío
-        return
-      }
+      if (!fiscal_name || !tax_id || !fiscal_address || !iban) { return }
       const { error } = await s.from('fiscal_identities').insert({
         owner_type: 'artist', owner_id: artist.id,
         invoice_as, fiscal_name, tax_id, fiscal_address, iban, settlement_email, agent_name, agent_phone, agent_email, iban_certificate_url
@@ -298,18 +301,15 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
       const tax_id = String(formData.get('tax_id') || '').trim() || null
       if (!legal_name) throw new Error('Nombre requerido')
 
-      // upsert por unique_key (definido por trigger)
       const { data: created, error } = await s.from('counterparties')
         .upsert({ organization_id: artist.organization_id, legal_name, is_company: kind, tax_id, as_third_party: true }, { onConflict: 'unique_key' })
         .select('id').single()
       if (error) throw new Error(error.message)
 
-      // asegurar flag as_third_party
       await s.from('counterparties').update({ as_third_party: true }).eq('id', created.id)
       counterparty_id = created.id
     }
 
-    // Crear vínculo si no existe activo
     const { error: linkErr } = await s.from('third_party_links').insert({ counterparty_id, artist_id: artist.id }).select('id').single()
     if (linkErr && !(linkErr.message || '').includes('duplicate key value violates unique constraint')) {
       throw new Error(linkErr.message)
@@ -350,7 +350,6 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
     const word = String(formData.get('confirm') || '')
     if (word !== 'ELIMINAR') throw new Error('Debes escribir ELIMINAR')
     const s = createSupabaseServer()
-    // borrado manual seguro
     await s.from('artist_group_shares').delete().eq('artist_id', artist.id)
     await s.from('artist_advances').delete().eq('artist_id', artist.id)
     await s.from('min_exempt_rules').delete().eq('artist_id', artist.id)
@@ -364,7 +363,6 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
     redirect('/artistas')
   }
 
-  // ========================= UI =========================
   const tabs = [
     { key: 'basicos', label: 'Datos básicos' },
     { key: 'personales', label: 'Datos personales' },
@@ -547,7 +545,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           <div className="divide-y divide-gray-200 mt-6">
             {configs.map(c => (
               <div key={c.id} className="py-3">
-                <div className="font-medium">{c.income_types?.name}</div>
+                <div className="font-medium">{incomeTypeNameFromRow(c)}</div>
                 <div className="text-sm text-gray-600">
                   {c.mode === 'commission'
                     ? `Comisión oficina: ${c.pct_office ?? 0}% · Base: ${c.base}`
@@ -566,7 +564,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           {configs.map(cfg => (
             <form key={cfg.id} action={addShare} className="border border-gray-200 rounded p-3 mb-4">
               <input type="hidden" name="income_type_id" value={cfg.income_type_id} />
-              <div className="font-medium mb-2">{cfg.income_types?.name}</div>
+              <div className="font-medium mb-2">{incomeTypeNameFromRow(cfg)}</div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {people.filter(p => p.role !== 'holder').map(p => (
                   <div key={p.id} className="flex items-center gap-2">
@@ -618,7 +616,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           <div className="divide-y divide-gray-200 mt-4">
             {minRules.map(r => (
               <div key={r.id} className="py-2">
-                <div className="font-medium">{r.income_types?.name}</div>
+                <div className="font-medium">{incomeTypeNameFromRow(r)}</div>
                 <div className="text-sm text-gray-600">
                   {r.rule_kind === 'per_operation' ? 'Por operación' : 'Hasta cubrir umbral'} · Base: {r.base}
                 </div>
@@ -648,7 +646,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           <div className="divide-y divide-gray-200 mt-4">
             {advances.map(a => (
               <div key={a.id} className="py-2">
-                <div className="font-medium">{a.income_types?.name}</div>
+                <div className="font-medium">{incomeTypeNameFromRow(a)}</div>
                 <div className="text-sm text-gray-600">
                   {new Date(a.advance_date).toLocaleDateString()} · {Number(a.amount).toLocaleString('es-ES',{style:'currency',currency:'EUR'})}
                 </div>
@@ -706,8 +704,8 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
             </form>
 
             <div className="divide-y divide-gray-200">
-              {links.map(async (lnk) => {
-                const cfgs = await getLinkConfigs(lnk.id)
+              {links.map((lnk, i) => {
+                const cfgs = linkConfigsArr[i] || []
                 return (
                   <div key={lnk.id} className="py-3">
                     <div className="flex items-center justify-between">
@@ -742,7 +740,7 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
 
                       <div className="mt-3 text-sm">
                         {cfgs.length === 0 && <div className="text-gray-500">Sin condiciones de tercero.</div>}
-                        {cfgs.map(c => (<div key={c.id} className="py-1">{c.income_types?.name} · {c.pct_third_party}% · {c.calc_base}</div>))}
+                        {cfgs.map((c: any) => (<div key={c.id} className="py-1">{incomeTypeNameFromRow(c)} · {c.pct_third_party}% · {c.calc_base}</div>))}
                       </div>
                     </div>
                   </div>
