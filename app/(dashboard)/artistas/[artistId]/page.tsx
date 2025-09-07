@@ -374,7 +374,9 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
       throw new Error(link.error.message)
     }
 
+    // refrescamos artista y la ficha del tercero
     revalidatePath(`/artistas/${artist.id}?tab=terceros`)
+    revalidatePath(`/terceros/${counterparty_id}`)
   }
 
   async function unlinkThird(formData: FormData) {
@@ -762,13 +764,8 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           <div className="space-y-6">
             <form action={linkThird} className="border border-gray-200 rounded p-3">
               <div className="font-medium mb-2">Añadir tercero</div>
-              {/* 
-                Buscador con autocompletado + creación en línea si no hay coincidencias.
-                -> Inserta hidden inputs: mode ('existing'|'create') y counterparty_id si hay selección.
-                -> Si no hay coincidencias, muestra legal_name/kind/tax_id para crear in-line.
-              */}
+              {/* Picker con búsqueda/creación inline */}
               <CounterpartyPicker />
-
               <div className="mt-3"><button className="btn">Vincular</button></div>
             </form>
 
@@ -783,8 +780,10 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={cp?.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full object-cover border" alt="" />
                         <div>
-                          <div className="font-medium">{cp?.nick || cp?.legal_name}</div>
-                          {lnk.status === 'unlinked' && <span className="badge badge-red">Desvinculado</span>}
+                          <Link href={cp?.id ? `/terceros/${cp.id}` : '/terceros'} className="font-medium underline">
+                            {cp?.nick || cp?.legal_name || 'Tercero'}
+                          </Link>
+                          {lnk.status === 'unlinked' && <span className="badge badge-red ml-2">Desvinculado</span>}
                         </div>
                       </div>
                       {lnk.status === 'linked' && (
