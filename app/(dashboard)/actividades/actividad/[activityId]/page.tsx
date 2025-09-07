@@ -5,6 +5,13 @@ import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
 
+// Normaliza: si Supabase trae el join como array, coge el primero; si viene como objeto, devuélvelo tal cual.
+function one<T>(x: T | T[] | null | undefined): T | undefined {
+  return Array.isArray(x) ? x[0] : (x ?? undefined);
+}
+
+type Counterparty = { id: string; legal_name?: string; nick?: string; logo_url?: string };
+
 export const dynamic = 'force-dynamic'
 
 function companyLabel(c: any) { return c?.nick || c?.name }
@@ -182,10 +189,13 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     const concept = String(formData.get('concept')||'other') as any
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
     const due_rule = String(formData.get('due_rule')||'date') as any
-    const due_date = String(formData.get('due_date')||'') || null
-    let counterparty_id = String(formData.get('counterparty_id')||'') || null
-    if (!counterparty_id && promoterLink?.counterparties?.id) {
-      counterparty_id = promoterLink.counterparties.id
+    const due_date = String(formData.get('due_date') || '') || null;
+    let counterparty_id = String(formData.get('counterparty_id') || '') || null;
+    
+    // promoterLink.counterparties puede venir como objeto o como array [{...}]
+    const cp = one<Counterparty>(promoterLink?.counterparties as any);
+    if (!counterparty_id && cp?.id) {
+      counterparty_id = cp.id;
     }
     const { error } = await s.from('activity_billing_requests').insert({ activity_id: params.activityId, direction, concept, amount, due_rule, due_date, counterparty_id })
     if (error) throw new Error(error.message)
