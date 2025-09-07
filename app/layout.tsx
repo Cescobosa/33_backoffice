@@ -3,7 +3,12 @@ import type { ReactNode } from 'react'
 
 export const metadata = {
   title: 'Treintay3',
-  description: 'Gestión de Management y Producción',
+  icons: {
+    icon: [{ url: '/favicon.png' }],
+    apple: [{ url: '/apple-touch-icon.png' }]
+  },
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'Treintay3', statusBarStyle: 'default' }
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
