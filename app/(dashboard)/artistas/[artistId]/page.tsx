@@ -16,6 +16,13 @@ function incomeTypeNameFromRow(row: any): string | undefined {
   return it?.name
 }
 
+/** Devuelve el counterparty de un link tanto si viene como objeto como si viene como array */
+function counterpartyFromLink(lnk: any): any | undefined {
+  const c = lnk?.counterparties
+  if (Array.isArray(c)) return c[0]
+  return c
+}
+
 async function getArtistFull(id: string) {
   const s = createSupabaseServer()
   const { data: artist, error } = await s
@@ -706,14 +713,15 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
             <div className="divide-y divide-gray-200">
               {links.map((lnk, i) => {
                 const cfgs = linkConfigsArr[i] || []
+                const cp = counterpartyFromLink(lnk)
                 return (
                   <div key={lnk.id} className="py-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={lnk.counterparties?.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full object-cover border" alt="" />
+                        <img src={cp?.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full object-cover border" alt="" />
                         <div>
-                          <div className="font-medium">{lnk.counterparties?.nick || lnk.counterparties?.legal_name}</div>
+                          <div className="font-medium">{cp?.nick || cp?.legal_name}</div>
                           {lnk.status === 'unlinked' && <span className="badge badge-red">Desvinculado</span>}
                         </div>
                       </div>
