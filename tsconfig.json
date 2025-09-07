@@ -10,7 +10,13 @@
     "jsx": "preserve",
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+
+    // 🔽 Alias para imports como "@/lib/..." y "@/components/..."
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
   "exclude": ["node_modules"]
