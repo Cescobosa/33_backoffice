@@ -695,18 +695,14 @@ export default async function ArtistDetail({ params, searchParams }: { params: {
           <div className="space-y-6">
             <form action={linkThird} className="border border-gray-200 rounded p-3">
               <div className="font-medium mb-2">Añadir tercero</div>
-              <div className="flex items-center gap-3">
-                <select name="mode" className="border rounded px-2 py-1">
-                  <option value="existing">Seleccionar existente (ID)</option>
-                  <option value="create">Crear nuevo</option>
-                </select>
-                <input name="counterparty_id" placeholder="ID tercero (si existente)" className="border rounded px-2 py-1 flex-1" />
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
-                <input name="legal_name" placeholder="Nombre/razón social (para crear)" className="border rounded px-2 py-1" />
-                <select name="kind" className="border rounded px-2 py-1"><option value="person">Particular</option><option value="company">Empresa</option></select>
-                <input name="tax_id" placeholder="DNI/CIF (opcional)" className="border rounded px-2 py-1" />
-              </div>
+              {/*
+                Buscador con autocompletado + creación en línea si no hay coincidencias.
+                -> Inserta hidden inputs: mode ('existing'|'create') y counterparty_id si hay selección.
+                -> Si no hay coincidencias, muestra legal_name/kind/tax_id para crear in-line.
+              */}
+              {/* @ts-expect-error Client Component */}
+              <CounterpartyPicker />
+      
               <div className="mt-3"><button className="btn">Vincular</button></div>
             </form>
 
