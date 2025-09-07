@@ -5,6 +5,7 @@ import DateCountdown from '@/components/DateCountdown'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { ensurePublicBucket } from '@/lib/storage'
 import { isValidIBAN } from '@/lib/iban'
+import CounterpartyPicker from '@/components/CounterpartyPicker'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
