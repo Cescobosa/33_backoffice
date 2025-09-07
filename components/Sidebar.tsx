@@ -6,7 +6,9 @@ const items = [
   { href: '/artistas', label: 'Artistas' },
   { href: '/terceros', label: 'Terceros' },
   { href: '/proveedores', label: 'Proveedores' },
-  { href: '/usuarios', label: 'Usuarios' }
+  { href: '/empresas', label: 'Empresas' },
+  { href: '/actividades', label: 'Actividades' },
+  { href: '/usuarios', label: 'Usuarios' },
 ]
 
 export default function Sidebar() {
