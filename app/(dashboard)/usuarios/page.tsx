@@ -1,70 +1,75 @@
+// app/(dashboard)/usuarios/page.tsx
+import { revalidatePath } from 'next/cache'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import UserCreate from '@/components/UserCreate'
 
 export const dynamic = 'force-dynamic'
 
+type Dept = { id: string; name: string }
+
 export default async function UsersPage() {
   const s = createSupabaseServer()
 
-  const { data: org } = await s.from('organizations').select('id,name').limit(1).single()
-  const { data: departments } = await s.from('departments').select('id,name').order('name')
-  const { data: profiles } = await s
-    .from('profiles')
-    .select('id, full_name, nick, email, is_admin, departments(id,name)')
-    .order('created_at', { ascending: false })
+  // Departamentos para el selector
+  const { data: departments, error: deptErr } = await s
+    .from('departments')
+    .select('id, name')
+    .order('name', { ascending: true })
 
+  if (deptErr) {
+    throw new Error(deptErr.message)
+  }
+
+  // ===== Server Action =====
   async function createUser(formData: FormData) {
     'use server'
-    const { createSupabaseAdmin } = await import('@/lib/supabaseAdmin')
-    const admin = createSupabaseAdmin()
-    const server = createSupabaseServer()
+    const s = createSupabaseServer()
 
     const email = String(formData.get('email') || '').trim()
+    const password = String(formData.get('password') || '')
     const full_name = String(formData.get('full_name') || '').trim()
     const nick = String(formData.get('nick') || '').trim() || null
     const department_id = String(formData.get('department_id') || '') || null
     const is_admin = formData.get('is_admin') === 'on'
 
-    if (!email) throw new Error('Email requerido')
-    const res = await admin.auth.admin.createUser({
-      email,
-      email_confirm: true
-    })
-    if (res.error || !res.data.user) throw new Error(res.error?.message || 'Error creando usuario')
+    if (!email) throw new Error('Email obligatorio')
 
-    const { error: pErr } = await server.from('profiles').insert({
-      id: res.data.user.id,
-      organization_id: org!.id,
+    // Crea el usuario en Auth (admin) y marca email como verificado
+    const { data: created, error: authErr } = await s.auth.admin.createUser({
+      email,
+      password: password || crypto.randomUUID(), // si no mandan password, generamos una
+      email_confirm: true,
+    })
+    if (authErr) throw new Error(authErr.message)
+
+    const authId = created.user?.id
+    if (!authId) throw new Error('No se pudo crear el usuario en Auth')
+
+    // Organización (usamos la primera)
+    const org = await s.from('organizations').select('id').limit(1).single()
+    if (org.error) throw new Error(org.error.message)
+
+    // Inserta profile
+    const { error: profErr } = await s.from('profiles').insert({
+      id: authId,
+      organization_id: org.data.id,
       full_name,
       nick,
       email,
       department_id: department_id || null,
-      is_admin
+      is_admin,
     })
-    if (pErr) throw new Error(pErr.message)
+    if (profErr) throw new Error(profErr.message)
+
+    revalidatePath('/usuarios')
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Usuarios</h1>
-        {/* Botón que despliega el formulario */}
-        {/* @ts-expect-error Server Action prop */}
-        <UserCreate actionCreate={createUser} departments={departments || []} />
-      </div>
+      <h1 className="text-2xl font-semibold">Usuarios</h1>
 
-      <div className="border rounded divide-y divide-gray-200">
-        {(profiles || []).map(p => (
-          <div key={p.id} className="p-3 flex items-center justify-between">
-            <div>
-              <div className="font-medium">{p.nick || p.full_name || p.email}</div>
-              <div className="text-xs text-gray-600">{p.email} · {p.departments?.name || 'Sin departamento'}</div>
-            </div>
-            {p.is_admin && <span className="badge">Admin</span>}
-          </div>
-        ))}
-        {!profiles?.length && <div className="p-3 text-sm text-gray-500">Aún no hay usuarios.</div>}
-      </div>
+      {/* Botón + formulario (el despliegue lo maneja el componente cliente) */}
+      <UserCreate actionCreate={createUser} departments={(departments as Dept[]) || []} />
     </div>
   )
 }
