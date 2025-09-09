@@ -5,7 +5,7 @@ import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
 
-// ========================= Helpers & tipos =========================
+// ========= Helpers y tipos =========
 
 // Si el join viene como array, devolvemos el primero; si viene como objeto/null, lo normalizamos.
 function one<T>(x: T | T[] | null | undefined): T | undefined {
@@ -15,7 +15,6 @@ function one<T>(x: T | T[] | null | undefined): T | undefined {
 type Counterparty = { id: string; legal_name?: string; nick?: string; logo_url?: string }
 type GroupCompany = { id: string; nick?: string; name?: string; logo_url?: string }
 
-// Fila mínima que vamos a usar de "activities"
 type ActivityRow = {
   id: string
   artist_id: string
@@ -39,12 +38,12 @@ function companyLabel(c: Pick<GroupCompany, 'nick' | 'name'> | undefined) {
   return c?.nick || c?.name || ''
 }
 
-// ========================= Página =========================
+// ========= Página =========
 
 export default async function ActivityDetail({ params }: { params: { activityId: string } }) {
   const s = createSupabaseServer()
 
-  // Datos de la actividad (comprobando error explícitamente y tipando la fila)
+  // Actividad
   const { data: aData, error: aErr } = await s
     .from('activities')
     .select(
@@ -68,14 +67,22 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .eq('id', params.activityId)
     .single()
 
-  if (aErr || !aData) throw new Error(aErr?.message || 'Actividad no encontrada')
-  const a = aData as ActivityRow
+  if (aErr || !aData) {
+    throw new Error(aErr?.message || 'Actividad no encontrada')
+  }
+
+  // TIPADO seguro de la fila (después de comprobar error)
+  const a: ActivityRow = aData as any
   const gc = one<GroupCompany>(a.group_companies as any) // empresa normalizada
 
   // Artista
-  const { data: artist } = await s.from('artists').select('id, stage_name').eq('id', a.artist_id).single()
+  const { data: artist } = await s
+    .from('artists')
+    .select('id, stage_name')
+    .eq('id', a.artist_id)
+    .single()
 
-  // Empresas del grupo (para el selector)
+  // Empresas del grupo (selector)
   const { data: companies } = await s
     .from('group_companies')
     .select('id, nick, name, logo_url')
@@ -89,7 +96,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .maybeSingle()
   const promoterCP = one<Counterparty>(promoterLink?.counterparties as any)
 
-  // Módulos
+  // Otros módulos
   const { data: incomes } = await s.from('activity_incomes').select('*').eq('activity_id', a.id).order('created_at')
   const { data: agents } = await s
     .from('activity_zone_agents')
@@ -107,7 +114,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick,logo_url)')
     .eq('activity_id', a.id)
 
-  // ========================= Server Actions =========================
+  // ========= Server Actions =========
 
   async function saveBasics(formData: FormData) {
     'use server'
@@ -387,13 +394,15 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     const pct = formData.get('pct') ? Number(formData.get('pct')) : null
     const base_on = String(formData.get('base_on') || 'gross') as any
 
-    const { error } = await s.from('activity_partners').insert({ activity_id: params.activityId, counterparty_id, pct, base_on })
+    const { error } = await s
+      .from('activity_partners')
+      .insert({ activity_id: params.activityId, counterparty_id, pct, base_on })
     if (error) throw new Error(error.message)
 
     revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
-  // ========================= Render =========================
+  // ========= Render =========
 
   return (
     <div className="space-y-6">
@@ -403,10 +412,21 @@ export default async function ActivityDetail({ params }: { params: { activityId:
             Actividad · {artist?.stage_name} ({a.type === 'concert' ? 'Concierto' : a.type})
           </h1>
           <div className="text-sm text-gray-600">
-            <Link href={`/artistas/${artist?.id}`} className="underline">Ir a la ficha del artista</Link>
+            <Link
+              href={{ pathname: '/artistas/[artistId]', query: { artistId: artist?.id ?? '' } }}
+              className="underline"
+            >
+              Ir a la ficha del artista
+            </Link>
           </div>
         </div>
-        <Link href={`/actividades/artista/${a.artist_id}`} className="btn-secondary">Volver</Link>
+
+        <Link
+          href={{ pathname: '/actividades/artista/[artistId]', query: { artistId: a.artist_id } }}
+          className="btn-secondary"
+        >
+          Volver
+        </Link>
       </div>
 
       {/* DATOS BÁSICOS */}
@@ -447,7 +467,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           </div>
         </form>
 
-        {/* Form 2: empresa del grupo (NO anidar dentro del form anterior) */}
+        {/* Form 2: empresa del grupo */}
         <div className="mt-4 border-t pt-4">
           <form action={setCompany} className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
@@ -458,7 +478,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
                 className="w-full border rounded px-3 py-2"
               >
                 <option value="">(sin empresa)</option>
-                {(companies || []).map(c => (
+                {(companies || []).map((c) => (
                   <option key={c.id} value={c.id}>
                     {companyLabel(c)}
                   </option>
@@ -475,7 +495,6 @@ export default async function ActivityDetail({ params }: { params: { activityId:
       {/* PROMOTOR */}
       <ModuleCard title="Promotor" leftActions={<span className="badge">Editar</span>}>
         <form action={attachPromoter} className="border rounded p-3">
-          {/* Picker con búsqueda/alta */}
           <CounterpartyPicker />
           <div className="mt-2"><button className="btn">Vincular promotor</button></div>
         </form>
@@ -484,7 +503,10 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           <div className="mt-3 flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={promoterCP.logo_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
-            <Link href={`/terceros/${promoterCP.id}`} className="underline font-medium">
+            <Link
+              href={{ pathname: '/terceros/[id]', query: { id: promoterCP.id } }}
+              className="underline font-medium"
+            >
               {promoterCP.nick || promoterCP.legal_name}
             </Link>
           </div>
