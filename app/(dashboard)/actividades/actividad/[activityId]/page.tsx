@@ -15,6 +15,24 @@ function one<T>(x: T | T[] | null | undefined): T | undefined {
 type Counterparty = { id: string; legal_name?: string; nick?: string; logo_url?: string }
 type GroupCompany = { id: string; nick?: string; name?: string; logo_url?: string }
 
+// Fila mínima que vamos a usar de "activities"
+type ActivityRow = {
+  id: string
+  artist_id: string
+  type: string
+  status: 'draft' | 'hold' | 'confirmed' | null
+  date: string | null
+  time: string | null
+  municipality: string | null
+  province: string | null
+  country: string | null
+  capacity: number | null
+  pay_kind: 'pay' | 'free' | null
+  tags: string[] | null
+  venues?: any
+  group_companies?: GroupCompany | GroupCompany[] | null
+}
+
 export const dynamic = 'force-dynamic'
 
 function companyLabel(c: Pick<GroupCompany, 'nick' | 'name'> | undefined) {
@@ -26,8 +44,8 @@ function companyLabel(c: Pick<GroupCompany, 'nick' | 'name'> | undefined) {
 export default async function ActivityDetail({ params }: { params: { activityId: string } }) {
   const s = createSupabaseServer()
 
-  // Datos de la actividad
-  const { data: a } = await s
+  // Datos de la actividad (comprobando error explícitamente y tipando la fila)
+  const { data: aData, error: aErr } = await s
     .from('activities')
     .select(
       [
@@ -50,7 +68,9 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .eq('id', params.activityId)
     .single()
 
-  if (!a) throw new Error('Actividad no encontrada')
+  if (aErr || !aData) throw new Error(aErr?.message || 'Actividad no encontrada')
+  const a = aData as ActivityRow
+  const gc = one<GroupCompany>(a.group_companies as any) // empresa normalizada
 
   // Artista
   const { data: artist } = await s.from('artists').select('id, stage_name').eq('id', a.artist_id).single()
@@ -67,6 +87,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .select('id, counterparty_id, counterparties(id,legal_name,nick,logo_url)')
     .eq('activity_id', a.id)
     .maybeSingle()
+  const promoterCP = one<Counterparty>(promoterLink?.counterparties as any)
 
   // Módulos
   const { data: incomes } = await s.from('activity_incomes').select('*').eq('activity_id', a.id).order('created_at')
@@ -85,10 +106,6 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     .from('activity_partners')
     .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick,logo_url)')
     .eq('activity_id', a.id)
-
-  // Normalizados para lectura sencilla
-  const gc = one<GroupCompany>(a.group_companies as any)
-  const promoterCP = one<Counterparty>(promoterLink?.counterparties as any)
 
   // ========================= Server Actions =========================
 
@@ -302,8 +319,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     const due_date = String(formData.get('due_date') || '') || null
     let counterparty_id = String(formData.get('counterparty_id') || '') || null
 
-    const cp = one<Counterparty>(promoterLink?.counterparties as any)
-    if (!counterparty_id && cp?.id) counterparty_id = cp.id
+    if (!counterparty_id && promoterCP?.id) counterparty_id = promoterCP.id
 
     const { error } = await s
       .from('activity_billing_requests')
