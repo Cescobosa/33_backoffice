@@ -44,6 +44,21 @@ export default async function ThirdDetail({
     .eq('counterparty_id', third.id)
     .order('linked_at', { ascending: false })
 
+  // Condiciones por vínculo: las cargo en bloque y agrupo por link_id
+  let cfgByLink: Record<string, Array<{ name: string; pct: number; base: string }>> = {}
+  if (links && links.length) {
+    const ids = links.map(l => l.id)
+    const { data: cfgs } = await s
+      .from('third_party_income_configs')
+      .select('third_party_link_id, pct_third_party, calc_base, income_types(name)')
+      .in('third_party_link_id', ids)
+    for (const c of cfgs || []) {
+      const arr = cfgByLink[c.third_party_link_id] || []
+      arr.push({ name: one(c.income_types)?.name || 'Tipo', pct: c.pct_third_party, base: c.calc_base })
+      cfgByLink[c.third_party_link_id] = arr
+    }
+  }
+
   // Contratos del tercero
   const { data: contracts } = await s
     .from('contracts')
@@ -123,7 +138,10 @@ export default async function ThirdDetail({
             {third.is_company ? 'Empresa' : 'Particular'}
           </div>
         </div>
-        <Link href="/terceros" className="btn-secondary">Volver</Link>
+        <div className="flex gap-2">
+          <Link href={`/terceros/${third.id}?tab=datos&sub=basicos`} className="btn-secondary">Editar</Link>
+          <Link href="/terceros" className="btn-secondary">Volver</Link>
+        </div>
       </div>
 
       <div className="flex gap-2">
@@ -218,17 +236,39 @@ export default async function ThirdDetail({
               <div className="divide-y divide-gray-200">
                 {(links || []).map(l => {
                   const art = one(l?.artists)
+                  const cfgs = cfgByLink[l.id] || []
                   return (
-                    <div key={l.id} className="py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={art?.avatar_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
-                        <div>
-                          <Link href={`/artistas/${art?.id}`} className="font-medium underline">{art?.stage_name}</Link>
-                          <span className="ml-2 text-xs text-gray-600">{l.status === 'linked' ? 'Vinculado' : 'Desvinculado'}</span>
+                    <div key={l.id} className="py-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={art?.avatar_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
+                          <div>
+                            <Link href={`/artistas/${art?.id}`} className="font-medium underline">{art?.stage_name}</Link>
+                            <span className="ml-2 text-xs text-gray-600">
+                              {l.status === 'linked' ? 'Vinculado' : 'Desvinculado'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {l.linked_at ? `Vinculado: ${new Date(l.linked_at).toLocaleDateString('es-ES')}` : ''}
+                          {l.unlinked_at ? ` · Desvinculado: ${new Date(l.unlinked_at).toLocaleDateString('es-ES')}` : ''}
                         </div>
                       </div>
-                      {l.unlinked_at && <div className="text-xs text-gray-500">Desvinculado: {new Date(l.unlinked_at).toLocaleDateString()}</div>}
+
+                      {/* condiciones del vínculo */}
+                      <div className="mt-2 text-sm text-gray-700">
+                        {cfgs.length === 0
+                          ? <span className="text-gray-500">Sin condiciones económicas.</span>
+                          : (
+                            <ul className="list-disc pl-5">
+                              {cfgs.map((c, i) => (
+                                <li key={i}>{c.name} · {c.pct}% · {c.base}</li>
+                              ))}
+                            </ul>
+                          )
+                        }
+                      </div>
                     </div>
                   )
                 })}
