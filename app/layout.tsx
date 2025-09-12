@@ -1,14 +1,16 @@
 import './globals.css'
 import type { ReactNode } from 'react'
+import type { Metadata } from 'next'
 
-export const metadata = {
-  title: 'Treintay3',
+export const metadata: Metadata = {
+  title: 'Treintay3 – Backoffice',
+  description: 'Producciones & Management',
   icons: {
-    icon: [{ url: '/favicon.png' }],
-    apple: [{ url: '/apple-touch-icon.png' }]
+    icon: '/favicon.png',
+    shortcut: '/favicon.png',
+    apple: '/apple-touch-icon.png'
   },
-  manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'Treintay3', statusBarStyle: 'default' }
+  manifest: '/site.webmanifest'
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
