@@ -20,7 +20,9 @@ export default async function ActivitiesByArtist({ params }: { params: { artistI
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Actividades · {artist?.stage_name || ''}</h1>
-        <Link href={`/artistas/${params.artistId}?tab=actividades`} className="btn-secondary">Volver a artista</Link>
+        <Link href={`/artistas/${params.artistId}?tab=actividades`} className="btn-secondary">
+          Volver a artista
+        </Link>
       </div>
 
       <ModuleCard title="Listado">
