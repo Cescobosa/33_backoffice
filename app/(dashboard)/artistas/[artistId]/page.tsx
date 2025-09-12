@@ -812,7 +812,7 @@ export default async function ArtistDetail({
       )}
 
       {parentTab === 'actividades' && (
-        <ModuleCard title="Actividades" leftActions={<Link className="btn" href={`/actividades/${artist.id}`}>Ver todas</Link>}>
+        <ModuleCard title="Actividades" leftActions={<Link className="btn" href={`/actividades/artista/${artist.id}`}>Ver todas</Link>}>
           <div className="text-sm text-gray-500">Accede al listado de actividades de este artista.</div>
         </ModuleCard>
       )}
