@@ -1,15 +1,30 @@
 import Link from 'next/link'
-import { createSupabaseServer } from '@/lib/supabaseServer'
 import ModuleCard from '@/components/ModuleCard'
+import { createSupabaseServer } from '@/lib/supabaseServer'
 
 export const dynamic = 'force-dynamic'
 
-export default async function ActivitiesHome() {
+/** Si un join viene como array (PostgREST), normaliza a 1 registro */
+function one<T>(x: T | T[] | null | undefined): T | undefined {
+  return Array.isArray(x) ? x[0] : (x ?? undefined)
+}
+
+function companyLabel(c: any) {
+  return c?.nick || c?.name
+}
+
+export default async function ActivitiesIndex() {
   const s = createSupabaseServer()
-  const { data: acts } = await s
+  const { data: acts, error } = await s
     .from('activities')
-    .select('id, artist_id, type, status, date, municipality, province, country, artists(id,stage_name)')
+    .select(`
+      id, artist_id, type, status, date, time, municipality, province, country,
+      artists ( id, stage_name, avatar_url ),
+      group_companies ( id, nick, name, logo_url )
+    `)
     .order('date', { ascending: false })
+
+  if (error) throw new Error(error.message)
 
   return (
     <div className="space-y-6">
@@ -20,23 +35,28 @@ export default async function ActivitiesHome() {
 
       <ModuleCard title="Listado">
         <div className="divide-y divide-gray-200">
-          {(acts || []).map(a => (
-            <div key={a.id} className="py-2 flex items-center justify-between">
-              <div>
-                <div className="font-medium">
-                  {a.artists?.stage_name || 'Artista'} · {a.type}
+          {(acts || []).map((a: any) => {
+            const art = one(a.artists)
+            const gc = one(a.group_companies)
+            return (
+              <Link
+                key={a.id}
+                href={`/actividades/actividad/${a.id}`}
+                className="block hover:bg-gray-50"
+              >
+                <div className="py-3 px-1">
+                  <div className="font-medium">
+                    {art?.stage_name || 'Artista'} · {a.type}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    {a.status} · {a.date ? new Date(a.date).toLocaleDateString('es-ES') : ''} · {a.municipality || ''}{a.province ? `, ${a.province}` : ''}{a.country ? `, ${a.country}` : ''}
+                    {gc ? ` · ${companyLabel(gc)}` : ''}
+                  </div>
                 </div>
-                <div className="text-sm text-gray-600">
-                  {a.status} · {a.date ? new Date(a.date).toLocaleDateString() : ''} · {a.municipality || ''}{a.province ? ` (${a.province})` : ''}{a.country ? ` · ${a.country}` : ''}
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Link href={`/actividades/actividad/${a.id}`} className="btn-secondary">Abrir</Link>
-                <Link href={`/actividades/artista/${a.artist_id}`} className="btn-secondary">Ver del artista</Link>
-              </div>
-            </div>
-          ))}
-          {!acts?.length && <div className="text-sm text-gray-500">Aún no hay actividades.</div>}
+              </Link>
+            )
+          })}
+          {!acts?.length && <div className="py-3 text-sm text-gray-500">No hay actividades.</div>}
         </div>
       </ModuleCard>
     </div>
