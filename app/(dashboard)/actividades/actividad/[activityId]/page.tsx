@@ -421,12 +421,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           </div>
         </div>
 
-        <Link
-          href={{ pathname: '/actividades/artista/[artistId]', query: { artistId: a.artist_id } }}
-          className="btn-secondary"
-        >
-          Volver
-        </Link>
+      <Link href={`/actividades/artista/${a.artist_id}`} className="btn-secondary">Volver</Link>
       </div>
 
       {/* DATOS BÁSICOS */}
