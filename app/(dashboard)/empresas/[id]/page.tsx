@@ -1,161 +1,150 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import { ensurePublicBucket } from '@/lib/storage'
+import ModuleCard from '@/components/ModuleCard'
 import { revalidatePath } from 'next/cache'
+import { ensurePublicBucket } from '@/lib/storage'
+import ActivitiesMap from '@/components/ActivitiesMap'
 import SavedToast from '@/components/SavedToast'
-import ActivitiesMap, { ActivityForMap } from '@/components/ActivitiesMap'
-import ActivityListItem, { ActivityListModel } from '@/components/ActivityListItem'
 
 export const dynamic = 'force-dynamic'
-
-type Company = { id: string; name: string | null; nick: string | null; logo_url: string | null }
-type ActivityRow = {
-  id: string; type: string | null; status: string | null; date: string | null;
-  municipality: string | null; province: string | null; country: string | null;
-  artist_id: string | null; company_id: string | null
-}
-type ArtistLite = { id: string; stage_name: string | null; avatar_url: string | null }
-
-function todayISO() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10) }
-
-async function getCompany(id: string) {
-  const s = createSupabaseServer()
-  const { data } = await s.from('group_companies').select('id, name, nick, logo_url').eq('id', id).single()
-  return data as Company | null
-}
-
-async function getCompanyActivities({ companyId, q, type, from, to, past }:{
-  companyId: string; q?: string; type?: string; from?: string; to?: string; past?: boolean
-}): Promise<ActivityListModel[]> {
-  const s = createSupabaseServer()
-  let qb = s.from('activities').select('id, type, status, date, municipality, province, country, artist_id, company_id')
-    .eq('company_id', companyId).order('date', { ascending: !past }).order('created_at', { ascending: false })
-  if (type) qb = qb.eq('type', type)
-  if (past) {
-    const now = new Date(); const fromDef = new Date(now.getFullYear() - 1, 0, 1).toISOString().slice(0, 10)
-    qb = qb.lte('date', to || todayISO()).gte('date', from || fromDef)
-  } else {
-    qb = qb.gte('date', from || todayISO()); if (to) qb = qb.lte('date', to)
-  }
-  if (q) {
-    const like = `%${q}%`
-    qb = qb.or(['municipality.ilike.'+like,'province.ilike.'+like,'country.ilike.'+like,'type.ilike.'+like,'status.ilike.'+like].join(','))
-  }
-  const { data: actsRaw } = await qb
-  const acts = (actsRaw || []) as ActivityRow[]
-
-  const artistIds = Array.from(new Set(acts.map(a => a.artist_id).filter((x): x is string => !!x)))
-  const artistsRes = artistIds.length
-    ? await s.from('artists').select('id, stage_name, avatar_url').in('id', artistIds)
-    : ({ data: [] } as { data: ArtistLite[] })
-  const byArtist: Record<string, ArtistLite> =
-    Object.fromEntries(((artistsRes.data || []) as ArtistLite[]).map((a: ArtistLite) => [a.id, a] as const))
-
-  const full: ActivityListModel[] = acts.map(a => ({
-    ...a,
-    artist: a.artist_id ? byArtist[a.artist_id] ?? null : null,
-    group_company: null, // ya estamos en la ficha de la empresa
-  }))
-  return full
-}
-async function getTypes(): Promise<string[]> {
-  const s = createSupabaseServer()
-  const { data } = await s.from('activities').select('type').not('type', 'is', null).order('type', { ascending: true })
-  return Array.from(new Set((data || []).map((x: any) => x.type).filter(Boolean))) as string[]
-}
+export const runtime = 'nodejs'
 
 export default async function CompanyDetail({
-  params, searchParams,
+  params,
+  searchParams,
 }: {
-  params: { companyId: string },
-  searchParams: { tab?: string, mode?: string, saved?: string, q?: string, type?: string, from?: string, to?: string, past?: string }
+  params: { companyId: string }
+  searchParams?: { tab?: string; edit?: string; saved?: string; q?: string; type?: string; past?: string }
 }) {
-  const company = await getCompany(params.companyId)
-  if (!company) return <div className="space-y-4"><h1 className="text-2xl font-semibold">Empresa</h1><div className="text-sm text-gray-600">No encontrada.</div></div>
+  const s = createSupabaseServer()
+  const tab = searchParams?.tab || 'datos'
+  const isEditing = searchParams?.edit === '1'
+  const { data: company } = await s
+    .from('group_companies')
+    .select('id, name, nick, logo_url, tax_id, notes')
+    .eq('id', params.companyId)
+    .maybeSingle()
 
-  const tab = searchParams.tab || 'datos'
-  const isEdit = searchParams.mode === 'edit'
-  const saved = searchParams.saved === '1'
+  if (!company) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold">Empresa</h1>
+        <div className="text-sm text-gray-600">No se encontró la empresa solicitada.</div>
+        <Link href="/empresas" className="btn-secondary">Volver</Link>
+      </div>
+    )
+  }
 
-  async function saveCompany(fd: FormData) {
+  // ====== datos actividades filtrables ======
+  const q = (searchParams?.q || '').trim()
+  const type = (searchParams?.type || '').trim()
+  const past = searchParams?.past === '1'
+  const today = new Date().toISOString().slice(0, 10)
+
+  let query = s
+    .from('activities')
+    .select(`
+      id, type, status, date, municipality, province, country, lat, lng,
+      artists(id,stage_name,avatar_url)
+    `)
+    .eq('company_id', company.id)
+    .order('date', { ascending: true })
+
+  if (!past) query = query.gte('date', today)
+  if (type) query = query.eq('type', type)
+  if (q && q.length >= 2) {
+    // filtros seguros (no incluimos relaciones en el or para evitar errores)
+    query = query.or(
+      `municipality.ilike.%${q}%,province.ilike.%${q}%,country.ilike.%${q}%,type.ilike.%${q}%`
+    )
+  }
+  const { data: acts } = await query
+
+  // ====== ACTIONS ======
+  async function saveBasics(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const name = String(fd.get('name') || '').trim() || null
-    const nick = String(fd.get('nick') || '').trim() || null
+    const name = String(formData.get('name') || '').trim()
+    const nick = String(formData.get('nick') || '').trim() || null
+    const tax_id = String(formData.get('tax_id') || '').trim() || null
+    const notes = String(formData.get('notes') || '').trim() || null
     let logo_url: string | null = null
-    const file = fd.get('logo') as File | null
+    const file = formData.get('logo') as File | null
     if (file && file.size > 0) {
       await ensurePublicBucket('avatars')
-      const up = await s.storage.from('avatars').upload(`companies/${params.companyId}/${crypto.randomUUID()}`, file, { cacheControl: '3600', upsert: false, contentType: file.type || 'image/*' })
+      const up = await s.storage.from('avatars').upload(
+        `group_companies/${params.companyId}/${crypto.randomUUID()}`,
+        file,
+        { cacheControl: '3600', upsert: false, contentType: file.type || 'image/*' }
+      )
       if (up.error) throw new Error(up.error.message)
       logo_url = s.storage.from('avatars').getPublicUrl(up.data.path).data.publicUrl
     }
-    const { error } = await s.from('group_companies').update({ name, nick, ...(logo_url ? { logo_url } : {}) }).eq('id', params.companyId)
+    const { error } = await s
+      .from('group_companies')
+      .update({ name, nick, tax_id, notes, ...(logo_url ? { logo_url } : {}) })
+      .eq('id', params.companyId)
     if (error) throw new Error(error.message)
     revalidatePath(`/empresas/${params.companyId}`)
-    redirect(`/empresas/${params.companyId}?tab=datos&mode=edit&saved=1`)
   }
 
-  // Actividades (si pestaña)
-  let acts: ActivityListModel[] = []
-  let types: string[] = []
-  if (tab === 'actividades') {
-    const q = searchParams.q || '', type = searchParams.type || '', past = searchParams.past === '1', from = searchParams.from, to = searchParams.to
-    ;[acts, types] = await Promise.all([getCompanyActivities({ companyId: params.companyId, q, type, from, to, past }), getTypes()])
-  }
-
-  const mapData: ActivityForMap[] = acts.map(a => ({
-    id: a.id, type: a.type || undefined, status: a.status || undefined, date: a.date || undefined,
-    municipality: a.municipality || undefined, province: a.province || undefined, country: a.country || undefined,
-  }))
+  // ====== UI ======
+  const toggleHref = (v: '0' | '1') =>
+    ({ pathname: `/empresas/${company.id}`, query: { tab, edit: v } } as any)
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {company.logo_url && <img src={company.logo_url} className="h-10 w-auto object-contain" alt="" />}
-          <h1 className="text-2xl font-semibold">{company.nick || company.name}</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={company.logo_url || '/avatar.png'} alt="" className="h-10 w-auto object-contain" />
+          <div>
+            <h1 className="text-2xl font-semibold">{company.nick || company.name}</h1>
+            <div className="text-sm text-gray-600">{company.name}</div>
+          </div>
         </div>
         <div className="flex gap-2">
-          {!isEdit
-            ? <Link className="btn" href={{ pathname: `/empresas/${company.id}`, query: { tab, mode: 'edit' } }}>Editar ficha</Link>
-            : <Link className="btn-secondary" href={{ pathname: `/empresas/${company.id}`, query: { tab } }}>Terminar edición</Link>
-          }
-          <Link className="btn-secondary" href="/empresas">Volver</Link>
+          {tab === 'datos' ? (
+            <Link href={toggleHref(isEditing ? '0' : '1')} className="btn-secondary">
+              {isEditing ? 'Terminar edición' : 'Editar pestaña'}
+            </Link>
+          ) : null}
+          <Link href="/empresas" className="btn-secondary">Volver</Link>
         </div>
       </div>
 
       <div className="flex gap-2">
-        <Link href={{ pathname: `/empresas/${company.id}`, query: { tab: 'datos', mode: isEdit ? 'edit' : undefined } }}
-          className={`px-3 py-2 rounded-md ${tab === 'datos' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>Datos de la empresa</Link>
+        <Link href={{ pathname: `/empresas/${company.id}`, query: { tab: 'datos' } }}
+              className={`px-3 py-2 rounded-md ${tab === 'datos' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+          Datos de la empresa
+        </Link>
         <Link href={{ pathname: `/empresas/${company.id}`, query: { tab: 'actividades' } }}
-          className={`px-3 py-2 rounded-md ${tab === 'actividades' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>Actividades</Link>
+              className={`px-3 py-2 rounded-md ${tab === 'actividades' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+          Actividades
+        </Link>
       </div>
 
       {tab === 'datos' && (
-        <ModuleCard title="Datos" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
-          {!isEdit ? (
+        <ModuleCard
+          title="Datos"
+          leftActions={
+            <Link href={toggleHref(isEditing ? '0' : '1')} className="badge">{isEditing ? 'Terminar edición' : 'Editar'}</Link>
+          }
+        >
+          {!isEditing ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div>
-                <div className="text-gray-500">Nombre</div>
-                <div className="font-medium">{company.name}</div>
-              </div>
-              <div>
-                <div className="text-gray-500">Nick</div>
-                <div className="font-medium">{company.nick}</div>
-              </div>
-              <div className="md:col-span-2">
-                <div className="text-gray-500">Logo</div>
-                {company.logo_url ? <img src={company.logo_url} className="h-12 w-auto object-contain mt-1" alt="" /> : <div className="text-gray-500">(sin logo)</div>}
-              </div>
+              <div><div className="module-title">Nombre</div><div>{company.name}</div></div>
+              <div><div className="module-title">Nick</div><div>{company.nick || '—'}</div></div>
+              <div><div className="module-title">CIF/DNI</div><div>{company.tax_id || '—'}</div></div>
+              <div className="md:col-span-2"><div className="module-title">Notas</div><div>{company.notes || '—'}</div></div>
             </div>
           ) : (
-            <form action={saveCompany} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><label className="block text-sm mb-1">Nombre</label><input name="name" defaultValue={company.name || ''} className="w-full border rounded px-3 py-2" /></div>
-              <div><label className="block text-sm mb-1">Nick</label><input name="nick" defaultValue={company.nick || ''} className="w-full border rounded px-3 py-2" /></div>
-              <div className="md:col-span-2"><label className="block text-sm mb-1">Logo</label><input type="file" name="logo" accept="image/*" /></div>
+            <form action={saveBasics} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div><label className="block text-sm mb-1 module-title">Logo</label><input name="logo" type="file" accept="image/*" /></div>
+              <div><label className="block text-sm mb-1 module-title">Nick</label><input name="nick" defaultValue={company.nick || ''} className="w-full border rounded px-3 py-2" /></div>
+              <div className="md:col-span-2"><label className="block text-sm mb-1 module-title">Nombre</label><input name="name" defaultValue={company.name} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">CIF/DNI</label><input name="tax_id" defaultValue={company.tax_id || ''} className="w-full border rounded px-3 py-2" /></div>
+              <div className="md:col-span-2"><label className="block text-sm mb-1">Notas</label><input name="notes" defaultValue={company.notes || ''} className="w-full border rounded px-3 py-2" /></div>
               <div className="md:col-span-2"><button className="btn">Guardar</button></div>
             </form>
           )}
@@ -164,36 +153,87 @@ export default async function CompanyDetail({
 
       {tab === 'actividades' && (
         <ModuleCard title="Actividades de la empresa">
-          <form className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4" method="get">
+          {/* Filtros */}
+          <form className="flex flex-wrap gap-2 items-end mb-3" method="GET">
             <input type="hidden" name="tab" value="actividades" />
-            <div className="md:col-span-2">
-              <input name="q" defaultValue={searchParams.q || ''} placeholder="Buscar…" className="w-full border rounded px-3 py-2" />
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Buscar</label>
+              <input name="q" defaultValue={q} placeholder="Ciudad, provincia, país, tipo..."
+                     className="border rounded px-3 py-2" />
             </div>
             <div>
-              <select name="type" defaultValue={searchParams.type || ''} className="w-full border rounded px-3 py-2">
-                <option value="">Todos los tipos</option>
-                {types.map(t => <option key={t} value={t}>{t}</option>)}
+              <label className="block text-xs text-gray-600 mb-1">Tipo</label>
+              <select name="type" defaultValue={type} className="border rounded px-3 py-2">
+                <option value="">Todos</option>
+                <option value="concert">Concierto</option>
+                <option value="festival">Festival</option>
+                <option value="promo">Promo</option>
               </select>
             </div>
-            <div className="flex items-center gap-2"><label className="text-sm">Desde</label><input type="date" name="from" defaultValue={searchParams.from} className="border rounded px-2 py-1 w-full" /></div>
-            <div className="flex items-center gap-2"><label className="text-sm">Hasta</label><input type="date" name="to" defaultValue={searchParams.to} className="border rounded px-2 py-1 w-full" /></div>
-            <div className="md:col-span-5 flex items-center gap-2">
-              <button className="btn">Aplicar</button>
-              {searchParams.past === '1'
-                ? <Link className="btn-secondary" href={{ pathname: `/empresas/${company.id}`, query: { ...searchParams, tab: 'actividades', past: undefined } }}>Ver futuras</Link>
-                : <Link className="btn-secondary" href={{ pathname: `/empresas/${company.id}`, query: { ...searchParams, tab: 'actividades', past: '1' } }}>Ver pasadas</Link>}
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Rango</label>
+              <select name="past" defaultValue={past ? '1' : ''} className="border rounded px-3 py-2">
+                <option value="">Futuras</option>
+                <option value="1">Pasadas</option>
+              </select>
             </div>
+            <button className="btn">Aplicar</button>
           </form>
 
-          <ActivitiesMap activities={mapData} />
-          <div className="divide-y divide-gray-200 mt-4">
-            {acts.map(a => <ActivityListItem key={a.id} a={a} showArtist={true} />)}
-            {!acts.length && <div className="text-sm text-gray-500 py-3">No hay actividades con estos filtros.</div>}
+          {/* Mapa */}
+          <div className="mb-4">
+            <ActivitiesMap
+              points={(acts || [])
+                .filter((a) => Number.isFinite((a as any).lat) && Number.isFinite((a as any).lng))
+                .map((a: any) => ({
+                  id: a.id,
+                  lat: a.lat,
+                  lng: a.lng,
+                  date: a.date,
+                  status: a.status,
+                  type: a.type,
+                  href: `/actividades/actividad/${a.id}`,
+                }))}
+              height={320}
+            />
           </div>
+
+          {/* Listado */}
+          <div className="divide-y divide-gray-200">
+            {(acts || []).map((ac: any) => (
+              <Link key={ac.id} href={`/actividades/actividad/${ac.id}`}
+                    className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
+                <div>
+                  <div className="font-medium">{labelType(ac.type)}</div>
+                  <div className="text-sm text-gray-600">
+                    {stateBadge(ac.status)} · {ac.date ? new Date(ac.date).toLocaleDateString() : 'Sin fecha'}
+                    {' · '}
+                    {[ac.municipality, ac.province, ac.country].filter(Boolean).join(', ')}
+                  </div>
+                </div>
+                {/* Avatar de artista para vista “todas” */}
+                {ac.artists?.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={ac.artists.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover border" />
+                ) : null}
+              </Link>
+            ))}
+            {!acts?.length && <div className="text-sm text-gray-500 py-3">No hay actividades con estos filtros.</div>}
+          </div>
+
+          <SavedToast show={searchParams?.saved === '1'} />
         </ModuleCard>
       )}
-
-      <SavedToast show={saved} />
     </div>
   )
+}
+
+function labelType(t?: string | null) {
+  if (!t) return 'Actividad'
+  return t === 'concert' ? 'Concierto' : t
+}
+function stateBadge(s?: string | null) {
+  if (s === 'confirmed') return 'Confirmado'
+  if (s === 'hold') return 'Reserva'
+  return 'Borrador'
 }
