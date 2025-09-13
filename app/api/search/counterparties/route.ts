@@ -1,30 +1,42 @@
-// app/api/search/counterparties/route.ts
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 
-function normalize(q: string) {
-  return q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-}
+export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url)
-  const q = (searchParams.get('q') || '').trim()
-  const kind = searchParams.get('kind') === 'provider' ? 'provider' : 'third' // default third
-
+  const url = new URL(req.url)
+  const includeCompanies = url.searchParams.get('companies') === '1'
   const s = createSupabaseServer()
-  let query = s.from('counterparties')
-    .select('id, nick, legal_name, logo_url, status')
-    .eq(kind === 'provider' ? 'as_provider' : 'as_third_party', true)
-    .eq('status', 'active')
-    .order('legal_name', { ascending: true })
-    .limit(50)
 
-  if (q) {
-    const nq = normalize(q)
-    query = query.ilike('search_text', `%${nq}%`)
-  }
+  // Cargamos un listado amplio para filtrar en cliente
+  const [cp, gc] = await Promise.all([
+    s.from('counterparties')
+      .select('id, legal_name, nick, logo_url, tax_id')
+      .limit(1000)
+      .order('legal_name', { ascending: true }),
+    includeCompanies
+      ? s.from('group_companies')
+          .select('id, name, nick, logo_url')
+          .order('name', { ascending: true })
+      : Promise.resolve({ data: [] as any[] } as any),
+  ])
 
-  const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-  return NextResponse.json(data || [])
+  const rows = [
+    ...(cp.data || []).map((c: any) => ({
+      id: c.id,
+      label: c.nick || c.legal_name,
+      sub: c.tax_id || c.legal_name,
+      logo_url: c.logo_url,
+      kind: 'counterparty' as const,
+    })),
+    ...(gc.data || []).map((c: any) => ({
+      id: c.id,
+      label: c.nick || c.name,
+      sub: c.name,
+      logo_url: c.logo_url,
+      kind: 'company' as const,
+    })),
+  ]
+
+  return NextResponse.json(rows)
 }
