@@ -8,7 +8,9 @@ import { isValidIBAN } from '@/lib/iban'
 import CounterpartyPicker from '@/components/CounterpartyPicker'
 import IncomeConditionForm from '@/components/IncomeConditionForm'
 import { revalidatePath } from 'next/cache'
-import ArtistActivitiesMap from '@/components/ArtistActivitiesMap' // <-- NUEVO
+import ActivitiesMap from '@/components/ActivitiesMap'
+import SavedToast from '@/components/SavedToast'
+import SaveButton from '@/components/SaveButton'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -106,9 +108,7 @@ async function getLinkConfigs(linkId: string) {
   return data || []
 }
 
-/**
- * ACTIVIDADES por artista — 2 fases (sin join directo) para evitar errores en build/SSR
- */
+// Actividades por artista (dos fases para evitar fallos de join en build)
 async function getActivitiesByArtist(artistId: string) {
   const s = createSupabaseServer()
   const { data: acts, error } = await s
@@ -120,7 +120,6 @@ async function getActivitiesByArtist(artistId: string) {
   if (error) throw new Error(error.message)
 
   const companyIds = Array.from(new Set((acts || []).map(a => a.company_id).filter((x): x is string => Boolean(x))))
-
   let byId: Record<string, any> = {}
   if (companyIds.length) {
     const { data: companies, error: e2 } = await s
@@ -140,12 +139,12 @@ export default async function ArtistDetail({
   searchParams,
 }: {
   params: { artistId: string },
-  searchParams: { tab?: string, sub?: string }
+  searchParams: { tab?: string, sub?: string, edit?: string, saved?: string }
 }) {
   const id = params.artistId
   const parentTab = searchParams.tab || 'datos'
   const sub = searchParams.sub || 'basicos'
-
+  const editing = searchParams.edit === '1'
   const artist = await getArtistFull(id)
   if (!artist) notFound()
 
@@ -161,10 +160,19 @@ export default async function ArtistDetail({
     getLinks(id),
     getActivitiesByArtist(id),
   ])
-
   const linkConfigsArr = await Promise.all(links.map(l => getLinkConfigs(l.id)))
 
-  // ====== Server actions (sin cambios de comportamiento) ======
+  // ===== Helpers para redirecciones con saved=1
+  function u(q: Record<string,string|number|undefined>) {
+    const p = new URLSearchParams()
+    p.set('tab', parentTab)
+    if (parentTab === 'datos') p.set('sub', sub)
+    if (editing) p.set('edit', '1')
+    Object.entries(q).forEach(([k,v]) => { if (v!=null) p.set(k, String(v)) })
+    return `/artistas/${artist.id}?${p.toString()}`
+  }
+
+  // ====== Server actions (redirigen con saved=1)
   async function updateBasic(formData: FormData) {
     'use server'
     const supabase = createSupabaseServer()
@@ -187,6 +195,7 @@ export default async function ArtistDetail({
     }).eq('id', artist.id)
     if (error) throw new Error(error.message)
     revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'basicos' }))
   }
 
   async function addPerson(formData: FormData) {
@@ -201,7 +210,8 @@ export default async function ArtistDetail({
     if (!full_name) throw new Error('Nombre completo requerido')
     const { error } = await s.from('artist_people').insert({ artist_id: artist.id, role, full_name, dni, birth_date, phone, address })
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=personales`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'personales' }))
   }
 
   async function delPerson(formData: FormData) {
@@ -210,7 +220,8 @@ export default async function ArtistDetail({
     const pid = String(formData.get('person_id') || '')
     const { error } = await s.from('artist_people').delete().eq('id', pid).eq('artist_id', artist.id)
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=personales`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'personales' }))
   }
 
   async function addContract(formData: FormData) {
@@ -236,29 +247,19 @@ export default async function ArtistDetail({
       entity_type: 'artist', entity_id: artist.id, name, signed_at, expires_at, renew_at, is_active, pdf_url: pub.data.publicUrl,
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=contratos`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'contratos' }))
   }
 
   async function addConfig(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-
-    // Crear nuevo tipo si procede
     let income_type_id = String(formData.get('income_type_id') || '')
     const newTypeName = String(formData.get('new_income_type_name') || '').trim()
     if (!income_type_id && newTypeName) {
-      const slug = newTypeName
-        .normalize('NFD').replace(/\p{Diacritic}/gu, '')
-        .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+      const slug = newTypeName.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
       const ins = await s.from('income_types')
-        .insert({
-          organization_id: artist.organization_id,
-          scope: 'artist',
-          artist_id: artist.id,
-          name: newTypeName,
-          slug,
-          is_active: true,
-        })
+        .insert({ organization_id: artist.organization_id, scope: 'artist', artist_id: artist.id, name: newTypeName, slug, is_active: true })
         .select('id').single()
       if (ins.error) throw new Error(ins.error.message)
       income_type_id = ins.data.id
@@ -275,8 +276,8 @@ export default async function ArtistDetail({
       artist_id: artist.id, income_type_id, mode: mode as any, base, pct_office, pct_artist,
     })
     if (error) throw new Error(error.message)
-
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function addShare(formData: FormData) {
@@ -285,9 +286,7 @@ export default async function ArtistDetail({
     const income_type_id = String(formData.get('income_type_id') || '')
     if (!income_type_id) throw new Error('Tipo requerido')
     const entries: { pid: string, pct: number }[] = []
-    formData.forEach((v, k) => {
-      if (k.startsWith('share_')) entries.push({ pid: k.replace('share_', ''), pct: Number(v) || 0 })
-    })
+    formData.forEach((v, k) => { if (k.startsWith('share_')) entries.push({ pid: k.replace('share_', ''), pct: Number(v) || 0 }) })
     const { error: delErr } = await s.from('artist_group_shares').delete().eq('artist_id', artist.id).eq('income_type_id', income_type_id)
     if (delErr) throw new Error(delErr.message)
     const rows = entries.filter(e => e.pct > 0).map(e => ({ artist_id: artist.id, income_type_id, artist_person_id: e.pid, percentage: e.pct }))
@@ -295,7 +294,8 @@ export default async function ArtistDetail({
       const { error } = await s.from('artist_group_shares').insert(rows)
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function addMinRule(formData: FormData) {
@@ -312,14 +312,15 @@ export default async function ArtistDetail({
       artist_id: artist.id, income_type_id, rule_kind, base, until_amount_total, until_op_count, until_date, until_artist_generated_amount,
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function addAdvance(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
     const income_type_id = String(formData.get('income_type_id') || '')
-    const amount = Number(formData.get('amount') || 0) // <-- corregido
+    const amount = Number(formData.get('amount') || 0)
     const advance_date = String(formData.get('advance_date') || '') || null
     const note = String(formData.get('note') || '').trim() || null
     if (!income_type_id || !amount || !advance_date) throw new Error('Campos requeridos')
@@ -327,7 +328,8 @@ export default async function ArtistDetail({
       artist_id: artist.id, income_type_id, amount, advance_date, note,
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function saveFiscal(formData: FormData) {
@@ -363,14 +365,15 @@ export default async function ArtistDetail({
       }).eq('id', existing.data.id)
       if (error) throw new Error(error.message)
     } else {
-      if (!fiscal_name || !tax_id || !fiscal_address || !iban) { return }
+      if (!fiscal_name || !tax_id || !fiscal_address || !iban) { redirect(u({ tab:'datos', sub:'fiscales' })) }
       const { error } = await s.from('fiscal_identities').insert({
         owner_type: 'artist', owner_id: artist.id, invoice_as, fiscal_name, tax_id, fiscal_address,
         iban, settlement_email, agent_name, agent_phone, agent_email, iban_certificate_url,
       })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=fiscales`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'fiscales' }))
   }
 
   async function linkThird(formData: FormData) {
@@ -401,7 +404,8 @@ export default async function ArtistDetail({
     if (linkErr && !(linkErr.message || '').includes('duplicate key value')) {
       throw new Error(linkErr.message)
     }
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function unlinkThird(formData: FormData) {
@@ -412,7 +416,8 @@ export default async function ArtistDetail({
       .update({ status: 'unlinked', unlinked_at: new Date().toISOString() })
       .eq('id', link_id)
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function addThirdConfig(formData: FormData) {
@@ -425,7 +430,8 @@ export default async function ArtistDetail({
     const { error } = await s.from('third_party_income_configs')
       .insert({ third_party_link_id: link_id, income_type_id, calc_base, pct_third_party })
     if (error) throw new Error(error.message)
-    revalidatePath(`/artistas/${artist.id}?tab=datos&sub=condiciones`)
+    revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1, tab: 'datos', sub: 'condiciones' }))
   }
 
   async function archiveArtist() { 'use server'
@@ -433,12 +439,14 @@ export default async function ArtistDetail({
     const { error } = await s.from('artists').update({ status: 'archived', archived_at: new Date().toISOString() }).eq('id', artist.id)
     if (error) throw new Error(error.message)
     revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1 }))
   }
   async function recoverArtist() { 'use server'
     const s = createSupabaseServer()
     const { error } = await s.from('artists').update({ status: 'active', archived_at: null }).eq('id', artist.id)
     if (error) throw new Error(error.message)
     revalidatePath(`/artistas/${artist.id}`)
+    redirect(u({ saved: 1 }))
   }
   async function deleteArtist(formData: FormData) {
     'use server'
@@ -455,7 +463,7 @@ export default async function ArtistDetail({
     await s.from('fiscal_identities').delete().eq('owner_type','artist').eq('owner_id', artist.id)
     const { error } = await s.from('artists').delete().eq('id', artist.id)
     if (error) throw new Error(error.message)
-    redirect('/artistas')
+    redirect('/artistas?saved=1')
   }
 
   // NAV
@@ -471,8 +479,19 @@ export default async function ArtistDetail({
     { key: 'fiscales', label: 'Datos fiscales' },
   ]
 
+  // Helpers UI
+  const editToggleHref = (() => {
+    const p = new URLSearchParams()
+    p.set('tab', parentTab)
+    if (parentTab === 'datos') p.set('sub', sub)
+    if (!editing) p.set('edit', '1')
+    return `/artistas/${artist.id}?${p.toString()}`
+  })()
+
   return (
     <div className="space-y-6">
+      <SavedToast show={!!searchParams.saved} />
+
       {/* Cabecera */}
       <div className="flex items-center justify-between">
         <div>
@@ -483,6 +502,7 @@ export default async function ArtistDetail({
           </div>
         </div>
         <div className="flex gap-2">
+          <Link className="btn-secondary" href={editToggleHref}>{editing ? 'Salir de edición' : 'Editar ficha'}</Link>
           {artist.status === 'active' ? (
             <form action={archiveArtist}><button className="btn-secondary">Archivar</button></form>
           ) : (
@@ -503,7 +523,7 @@ export default async function ArtistDetail({
         {topTabs.map(t => (
           <Link
             key={t.key}
-            href={{ pathname: `/artistas/${artist.id}`, query: { tab: t.key, sub: sub } }}
+            href={{ pathname: `/artistas/${artist.id}`, query: { tab: t.key, sub, ...(editing ? { edit: '1' } : {}) } }}
             className={`px-3 py-2 rounded-md ${parentTab === t.key ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
           >
             {t.label}
@@ -517,7 +537,7 @@ export default async function ArtistDetail({
           {subTabs.map(t => (
             <Link
               key={t.key}
-              href={{ pathname: `/artistas/${artist.id}`, query: { tab: 'datos', sub: t.key } }}
+              href={{ pathname: `/artistas/${artist.id}`, query: { tab: 'datos', sub: t.key, ...(editing ? { edit: '1' } : {}) } }}
               className={`px-3 py-2 rounded-md ${sub === t.key ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
             >
               {t.label}
@@ -531,41 +551,63 @@ export default async function ArtistDetail({
         <>
           {/* SUB: BÁSICOS */}
           {sub === 'basicos' && (
-            <ModuleCard title="Datos básicos" leftActions={<span className="badge">Editar</span>}>
-              <form action={updateBasic} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm mb-1 module-title">Fotografía</label>
-                  <input type="file" name="avatar" accept="image/*" />
-                  {artist.avatar_url && (
-                    <div className="mt-2">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={artist.avatar_url} alt="" className="w-24 h-24 rounded-full object-cover border" />
-                    </div>
-                  )}
+            <ModuleCard title="Datos básicos">
+              {!editing ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="block text-sm mb-1 module-title">Fotografía</div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={artist.avatar_url || '/avatar.png'} alt="" className="w-24 h-24 rounded-full object-cover border" />
+                  </div>
+                  <div>
+                    <div className="block text-sm mb-1 module-title">Nombre artístico</div>
+                    <div className="text-sm">{artist.stage_name}</div>
+                  </div>
+                  <div>
+                    <div className="block text-sm mb-1 module-title">Tipo</div>
+                    <div className="text-sm">{artist.is_group ? 'Grupo' : 'Solista'}</div>
+                  </div>
+                  <div>
+                    <div className="block text-sm mb-1 module-title">Relación con oficina</div>
+                    <div className="text-sm">{artist.artist_contract_type === 'booking' ? 'Booking' : 'General'}</div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm mb-1 module-title">Nombre artístico</label>
-                  <input name="stage_name" defaultValue={artist.stage_name} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <input id="is_group" name="is_group" type="checkbox" defaultChecked={artist.is_group} />
-                  <label htmlFor="is_group" className="text-sm">¿Es grupo?</label>
-                </div>
-                <div>
-                  <div className="block text-sm mb-1 module-title">Relación con oficina</div>
-                  <label className="mr-4"><input type="radio" name="artist_contract_type" value="general" defaultChecked={artist.artist_contract_type !== 'booking'} /> General</label>
-                  <label className="ml-4"><input type="radio" name="artist_contract_type" value="booking" defaultChecked={artist.artist_contract_type === 'booking'} /> Booking</label>
-                </div>
-                <div className="md:col-span-2"><button className="btn">Guardar cambios</button></div>
-              </form>
+              ) : (
+                <form action={updateBasic} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm mb-1 module-title">Fotografía</label>
+                    <input type="file" name="avatar" accept="image/*" />
+                    {artist.avatar_url && (
+                      <div className="mt-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={artist.avatar_url} alt="" className="w-24 h-24 rounded-full object-cover border" />
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1 module-title">Nombre artístico</label>
+                    <input name="stage_name" defaultValue={artist.stage_name} className="w-full border rounded px-3 py-2" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input id="is_group" name="is_group" type="checkbox" defaultChecked={artist.is_group} />
+                    <label htmlFor="is_group" className="text-sm">¿Es grupo?</label>
+                  </div>
+                  <div>
+                    <div className="block text-sm mb-1 module-title">Relación con oficina</div>
+                    <label className="mr-4"><input type="radio" name="artist_contract_type" value="general" defaultChecked={artist.artist_contract_type !== 'booking'} /> General</label>
+                    <label className="ml-4"><input type="radio" name="artist_contract_type" value="booking" defaultChecked={artist.artist_contract_type === 'booking'} /> Booking</label>
+                  </div>
+                  <div className="md:col-span-2"><SaveButton /></div>
+                </form>
+              )}
             </ModuleCard>
           )}
 
           {/* SUB: PERSONALES */}
           {sub === 'personales' && (
-            <ModuleCard title="Datos personales" leftActions={<span className="badge">Editar</span>}>
-              <div className="space-y-4">
-                <form action={addPerson} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <ModuleCard title="Datos personales">
+              {editing && (
+                <form action={addPerson} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <label className="block text-sm mb-1 module-title">Rol</label>
                     <select name="role" className="w-full border rounded px-3 py-2" defaultValue={artist.is_group ? 'member' : 'holder'}>
@@ -578,37 +620,41 @@ export default async function ArtistDetail({
                   <div><label className="block text-sm mb-1">Fecha de nacimiento</label><input type="date" name="birth_date" className="w-full border rounded px-3 py-2" /></div>
                   <div><label className="block text-sm mb-1">Teléfono</label><input name="phone" className="w-full border rounded px-3 py-2" /></div>
                   <div><label className="block text-sm mb-1">Domicilio</label><input name="address" className="w-full border rounded px-3 py-2" /></div>
-                  <div className="md:col-span-3"><button className="btn">+ Añadir persona</button></div>
+                  <div className="md:col-span-3"><SaveButton>+ Añadir persona</SaveButton></div>
                 </form>
+              )}
 
-                <div className="divide-y divide-gray-200">
-                  {people.map(p => (
-                    <div key={p.id} className="py-2 flex items-center justify-between">
-                      <div>
-                        <div className="font-medium">{p.full_name}</div>
-                        <div className="text-xs text-gray-600">{p.role} · {p.dni || ''}</div>
-                      </div>
-                      <form action={delPerson}><input type="hidden" name="person_id" value={p.id} /><button className="btn-secondary">Eliminar</button></form>
+              <div className="divide-y divide-gray-200">
+                {people.map(p => (
+                  <div key={p.id} className="py-2 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{p.full_name}</div>
+                      <div className="text-xs text-gray-600">{p.role} · {p.dni || ''}</div>
                     </div>
-                  ))}
-                  {!people.length && <div className="text-sm text-gray-500">No hay personas registradas.</div>}
-                </div>
+                    {editing && (
+                      <form action={delPerson}><input type="hidden" name="person_id" value={p.id} /><button className="btn-secondary">Eliminar</button></form>
+                    )}
+                  </div>
+                ))}
+                {!people.length && !editing && <div className="text-sm text-gray-500">No hay personas registradas.</div>}
               </div>
             </ModuleCard>
           )}
 
           {/* SUB: CONTRATOS */}
           {sub === 'contratos' && (
-            <ModuleCard title="Contratos" leftActions={<span className="badge">Editar</span>}>
-              <form action={addContract} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div><label className="block text-sm mb-1 module-title">Nombre *</label><input name="name" required className="w-full border rounded px-3 py-2" /></div>
-                <div><label className="block text-sm mb-1">Fecha firma *</label><input type="date" name="signed_at" required className="w-full border rounded px-3 py-2" /></div>
-                <div><label className="block text-sm mb-1">Vencimiento</label><input type="date" name="expires_at" className="w-full border rounded px-3 py-2" /></div>
-                <div><label className="block text-sm mb-1">Renovación</label><input type="date" name="renew_at" className="w-full border rounded px-3 py-2" /></div>
-                <div className="flex items-center gap-2 mt-6"><input type="checkbox" id="is_active" name="is_active" defaultChecked /><label htmlFor="is_active" className="text-sm">Vigente</label></div>
-                <div className="md:col-span-2"><label className="block text-sm mb-1 module-title">PDF *</label><input type="file" name="pdf" required accept="application/pdf" /></div>
-                <div className="md:col-span-2"><button className="btn">+ Añadir contrato</button></div>
-              </form>
+            <ModuleCard title="Contratos">
+              {editing && (
+                <form action={addContract} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div><label className="block text-sm mb-1 module-title">Nombre *</label><input name="name" required className="w-full border rounded px-3 py-2" /></div>
+                  <div><label className="block text-sm mb-1">Fecha firma *</label><input type="date" name="signed_at" required className="w-full border rounded px-3 py-2" /></div>
+                  <div><label className="block text-sm mb-1">Vencimiento</label><input type="date" name="expires_at" className="w-full border rounded px-3 py-2" /></div>
+                  <div><label className="block text-sm mb-1">Renovación</label><input type="date" name="renew_at" className="w-full border rounded px-3 py-2" /></div>
+                  <div className="flex items-center gap-2 mt-6"><input type="checkbox" id="is_active" name="is_active" defaultChecked /><label htmlFor="is_active" className="text-sm">Vigente</label></div>
+                  <div className="md:col-span-2"><label className="block text-sm mb-1 module-title">PDF *</label><input type="file" name="pdf" required accept="application/pdf" /></div>
+                  <div className="md:col-span-2"><SaveButton>+ Añadir contrato</SaveButton></div>
+                </form>
+              )}
 
               <div className="divide-y divide-gray-200 mt-4">
                 {contracts.map(c => (
@@ -622,7 +668,7 @@ export default async function ArtistDetail({
                     <div className="mt-2"><a href={c.pdf_url} target="_blank" className="underline text-blue-700">Ver PDF</a></div>
                   </div>
                 ))}
-                {!contracts.length && <div className="text-sm text-gray-500">Sin contratos.</div>}
+                {!contracts.length && !editing && <div className="text-sm text-gray-500">Sin contratos.</div>}
               </div>
             </ModuleCard>
           )}
@@ -631,12 +677,15 @@ export default async function ArtistDetail({
           {sub === 'condiciones' && (
             <>
               {/* Condiciones económicas */}
-              <ModuleCard title="Condiciones económicas" leftActions={<span className="badge">Editar</span>}>
-                <IncomeConditionForm
-                  incomeTypes={incomeTypes}
-                  artistContractType={artist.artist_contract_type as 'booking'|'general'}
-                  actionAdd={addConfig}
-                />
+              {(editing || configs.length) && (
+              <ModuleCard title="Condiciones económicas">
+                {editing && (
+                  <IncomeConditionForm
+                    incomeTypes={incomeTypes}
+                    artistContractType={artist.artist_contract_type as 'booking'|'general'}
+                    actionAdd={addConfig}
+                  />
+                )}
                 <div className="divide-y divide-gray-200 mt-6">
                   {configs.map(c => (
                     <div key={c.id} className="py-3">
@@ -648,63 +697,73 @@ export default async function ArtistDetail({
                       </div>
                     </div>
                   ))}
-                  {!configs.length && <div className="text-sm text-gray-500">Sin condiciones.</div>}
+                  {!configs.length && !editing && <div className="text-sm text-gray-500">Sin condiciones.</div>}
                 </div>
               </ModuleCard>
+              )}
 
               {/* Reparto (si grupo) */}
-              {artist.is_group && (
-                <ModuleCard title="Reparto Artista (suma 100%)" leftActions={<span className="badge">Editar</span>}>
-                  {configs.map(cfg => (
-                    <form key={cfg.id} action={addShare} className="border border-gray-200 rounded p-3 mb-4">
-                      <input type="hidden" name="income_type_id" value={cfg.income_type_id} />
-                      <div className="font-medium mb-2">{incomeTypeNameFromRow(cfg)}</div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {people.filter(p => p.role !== 'holder').map(p => (
-                          <div key={p.id} className="flex items-center gap-2">
-                            <span className="text-sm">{p.full_name}</span>
-                            <input type="number" step="0.01" name={`share_${p.id}`} placeholder="%" className="w-24 border rounded px-2 py-1" />
+              {artist.is_group && (editing || configs.length) && (
+                <ModuleCard title="Reparto Artista (suma 100%)">
+                  {editing ? (
+                    <>
+                      {configs.map(cfg => (
+                        <form key={cfg.id} action={addShare} className="border border-gray-200 rounded p-3 mb-4">
+                          <input type="hidden" name="income_type_id" value={cfg.income_type_id} />
+                          <div className="font-medium mb-2">{incomeTypeNameFromRow(cfg)}</div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {people.filter(p => p.role !== 'holder').map(p => (
+                              <div key={p.id} className="flex items-center gap-2">
+                                <span className="text-sm">{p.full_name}</span>
+                                <input type="number" step="0.01" name={`share_${p.id}`} placeholder="%" className="w-24 border rounded px-2 py-1" />
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                      <div className="mt-3"><button className="btn">Guardar reparto</button></div>
-                    </form>
-                  ))}
-                  {!configs.length && <div className="text-sm text-gray-500">Primero define condiciones económicas.</div>}
+                          <div className="mt-3"><SaveButton>Guardar reparto</SaveButton></div>
+                        </form>
+                      ))}
+                      {!configs.length && <div className="text-sm text-gray-500">Primero define condiciones económicas.</div>}
+                    </>
+                  ) : (
+                    <div className="text-sm text-gray-500">Repartos visibles al editar (no hay datos resumidos).</div>
+                  )}
                 </ModuleCard>
               )}
 
               {/* Mínimos exentos */}
-              <ModuleCard title="Mínimos exentos" leftActions={<span className="badge">Editar</span>}>
-                <form action={addMinRule} className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-sm mb-1 module-title">Tipo ingreso</label>
-                    <select name="income_type_id" className="w-full border rounded px-2 py-1">
-                      {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1 module-title">Regla</label>
-                    <select name="rule_kind" className="w-full border rounded px-2 py-1" defaultValue="per_operation">
-                      <option value="per_operation">Por operación</option>
-                      <option value="until_threshold">Hasta cubrir umbral</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1 module-title">Base</label>
-                    <select name="base" className="w-full border rounded px-2 py-1" defaultValue="gross">
-                      <option value="gross">Bruto</option>
-                      <option value="net">Neto</option>
-                    </select>
-                  </div>
-                  <div className="lg:col-span-4 grid grid-cols-1 md:grid-cols-4 gap-2">
-                    <input name="until_amount_total" type="number" step="0.01" placeholder="Importe total (opcional)" className="border rounded px-2 py-1" />
-                    <input name="until_op_count" type="number" placeholder="Nº operaciones (opcional)" className="border rounded px-2 py-1" />
-                    <input name="until_date" type="date" className="border rounded px-2 py-1" />
-                    <input name="until_artist_generated_amount" type="number" step="0.01" placeholder="Generado por artista (opcional)" className="border rounded px-2 py-1" />
-                  </div>
-                  <div className="lg:col-span-4"><button className="btn">+ Añadir regla</button></div>
-                </form>
+              {(editing || minRules.length) && (
+              <ModuleCard title="Mínimos exentos">
+                {editing && (
+                  <form action={addMinRule} className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-sm mb-1 module-title">Tipo ingreso</label>
+                      <select name="income_type_id" className="w-full border rounded px-2 py-1">
+                        {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1 module-title">Regla</label>
+                      <select name="rule_kind" className="w-full border rounded px-2 py-1" defaultValue="per_operation">
+                        <option value="per_operation">Por operación</option>
+                        <option value="until_threshold">Hasta cubrir umbral</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1 module-title">Base</label>
+                      <select name="base" className="w-full border rounded px-2 py-1" defaultValue="gross">
+                        <option value="gross">Bruto</option>
+                        <option value="net">Neto</option>
+                      </select>
+                    </div>
+                    <div className="lg:col-span-4 grid grid-cols-1 md:grid-cols-4 gap-2">
+                      <input name="until_amount_total" type="number" step="0.01" placeholder="Importe total (opcional)" className="border rounded px-2 py-1" />
+                      <input name="until_op_count" type="number" placeholder="Nº operaciones (opcional)" className="border rounded px-2 py-1" />
+                      <input name="until_date" type="date" className="border rounded px-2 py-1" />
+                      <input name="until_artist_generated_amount" type="number" step="0.01" placeholder="Generado por artista (opcional)" className="border rounded px-2 py-1" />
+                    </div>
+                    <div className="lg:col-span-4"><SaveButton>+ Añadir regla</SaveButton></div>
+                  </form>
+                )}
 
                 <div className="divide-y divide-gray-200 mt-4">
                   {minRules.map(r => (
@@ -715,24 +774,28 @@ export default async function ArtistDetail({
                       </div>
                     </div>
                   ))}
-                  {!minRules.length && <div className="text-sm text-gray-500">Aún no hay reglas.</div>}
+                  {!minRules.length && !editing && <div className="text-sm text-gray-500">Aún no hay reglas.</div>}
                 </div>
               </ModuleCard>
+              )}
 
               {/* Adelantos */}
-              <ModuleCard title="Adelantos" leftActions={<span className="badge">Editar</span>}>
-                <form action={addAdvance} className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-sm mb-1 module-title">Tipo ingreso</label>
-                    <select name="income_type_id" className="w-full border rounded px-2 py-1">
-                      {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                  <div><label className="block text-sm mb-1 module-title">Importe</label><input name="amount" type="number" step="0.01" className="w-full border rounded px-2 py-1" /></div>
-                  <div><label className="block text-sm mb-1 module-title">Fecha</label><input name="advance_date" type="date" className="w-full border rounded px-2 py-1" /></div>
-                  <div><label className="block text-sm mb-1">Nota</label><input name="note" className="w-full border rounded px-2 py-1" /></div>
-                  <div className="md:col-span-4"><button className="btn">+ Añadir adelanto</button></div>
-                </form>
+              {(editing || advances.length) && (
+              <ModuleCard title="Adelantos">
+                {editing && (
+                  <form action={addAdvance} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-sm mb-1 module-title">Tipo ingreso</label>
+                      <select name="income_type_id" className="w-full border rounded px-2 py-1">
+                        {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    <div><label className="block text-sm mb-1 module-title">Importe</label><input name="amount" type="number" step="0.01" className="w-full border rounded px-2 py-1" /></div>
+                    <div><label className="block text-sm mb-1 module-title">Fecha</label><input name="advance_date" type="date" className="w-full border rounded px-2 py-1" /></div>
+                    <div><label className="block text-sm mb-1">Nota</label><input name="note" className="w-full border rounded px-2 py-1" /></div>
+                    <div className="md:col-span-4"><SaveButton>+ Añadir adelanto</SaveButton></div>
+                  </form>
+                )}
 
                 <div className="divide-y divide-gray-200 mt-4">
                   {advances.map(a => (
@@ -743,18 +806,22 @@ export default async function ArtistDetail({
                       </div>
                     </div>
                   ))}
-                  {!advances.length && <div className="text-sm text-gray-500">Sin adelantos.</div>}
+                  {!advances.length && !editing && <div className="text-sm text-gray-500">Sin adelantos.</div>}
                 </div>
               </ModuleCard>
+              )}
 
               {/* Terceros vinculados */}
-              <ModuleCard title="Terceros vinculados" leftActions={<span className="badge">Editar</span>}>
+              {(editing || links.length) && (
+              <ModuleCard title="Terceros vinculados">
                 <div className="space-y-6">
-                  <form action={linkThird} className="border border-gray-200 rounded p-3">
-                    <div className="font-medium mb-2">Añadir tercero</div>
-                    <CounterpartyPicker />
-                    <div className="mt-3"><button className="btn">Vincular</button></div>
-                  </form>
+                  {editing && (
+                    <form action={linkThird} className="border border-gray-200 rounded p-3">
+                      <div className="font-medium mb-2">Añadir tercero</div>
+                      <CounterpartyPicker />
+                      <div className="mt-3"><SaveButton>Vincular</SaveButton></div>
+                    </form>
+                  )}
 
                   <div className="divide-y divide-gray-200">
                     {links.map((lnk, i) => {
@@ -773,7 +840,7 @@ export default async function ArtistDetail({
                                 {lnk.status === 'unlinked' && <span className="ml-2 badge badge-red">Desvinculado</span>}
                               </div>
                             </div>
-                            {lnk.status === 'linked' && (
+                            {editing && lnk.status === 'linked' && (
                               <form action={unlinkThird}><input type="hidden" name="link_id" value={lnk.id} /><button className="btn-secondary">Desvincular</button></form>
                             )}
                           </div>
@@ -781,18 +848,20 @@ export default async function ArtistDetail({
                           {/* Condiciones del vínculo */}
                           <div className="mt-3 border rounded p-3">
                             <div className="font-medium mb-2 module-title">Condiciones (tercero)</div>
-                            <form action={addThirdConfig} className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                              <input type="hidden" name="link_id" value={lnk.id} />
-                              <select name="income_type_id" className="border rounded px-2 py-1">
-                                {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                              </select>
-                              <select name="calc_base" className="border rounded px-2 py-1">
-                                <option value="gross">Sobre bruto</option>
-                                <option value="net">Sobre neto</option>
-                              </select>
-                              <input name="pct_third_party" type="number" step="0.01" placeholder="% tercero" className="border rounded px-2 py-1" />
-                              <button className="btn">Añadir</button>
-                            </form>
+                            {editing && (
+                              <form action={addThirdConfig} className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                <input type="hidden" name="link_id" value={lnk.id} />
+                                <select name="income_type_id" className="border rounded px-2 py-1">
+                                  {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                                <select name="calc_base" className="border rounded px-2 py-1">
+                                  <option value="gross">Sobre bruto</option>
+                                  <option value="net">Sobre neto</option>
+                                </select>
+                                <input name="pct_third_party" type="number" step="0.01" placeholder="% tercero" className="border rounded px-2 py-1" />
+                                <SaveButton>Añadir</SaveButton>
+                              </form>
+                            )}
 
                             <div className="mt-3 text-sm">
                               {cfgs.length === 0 && <div className="text-gray-500">Sin condiciones de tercero.</div>}
@@ -802,11 +871,46 @@ export default async function ArtistDetail({
                         </div>
                       )
                     })}
-                    {!links.length && <div className="text-sm text-gray-500">No hay terceros vinculados.</div>}
+                    {!links.length && !editing && <div className="text-sm text-gray-500">No hay terceros vinculados.</div>}
                   </div>
                 </div>
               </ModuleCard>
+              )}
             </>
+          )}
+
+          {/* SUB: FISCALES */}
+          {sub === 'fiscales' && (
+            <ModuleCard title="Datos fiscales">
+              {!editing ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Aquí se asume que los datos fiscales se muestran desde su tabla.
+                      Si los quieres en lectura, puedes añadir una consulta adicional.
+                      Para mantener el alcance, dejamos solo el formulario al editar. */}
+                  <div className="text-sm text-gray-500">Entra en editar para ver/actualizar datos fiscales.</div>
+                </div>
+              ) : (
+                <form action={saveFiscal} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm mb-1 module-title">Factura como</label>
+                    <select name="invoice_as" className="w-full border rounded px-2 py-1">
+                      <option value="person">Particular</option>
+                      <option value="company">Empresa</option>
+                    </select>
+                  </div>
+                  <div><label className="block text-sm mb-1 module-title">Nombre fiscal</label><input name="fiscal_name" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">DNI / CIF</label><input name="tax_id" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">Domicilio fiscal</label><input name="fiscal_address" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1 module-title">IBAN</label><input name="iban" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">Certificado titularidad (opcional)</label><input type="file" name="iban_cert" /></div>
+                  <div><label className="block text-sm mb-1">Email liquidaciones</label><input name="settlement_email" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">Representante (nombre)</label><input name="agent_name" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">Representante (tel)</label><input name="agent_phone" className="w-full border rounded px-2 py-1" /></div>
+                  <div><label className="block text-sm mb-1">Representante (email)</label><input name="agent_email" className="w-full border rounded px-2 py-1" /></div>
+                  <div className="md:col-span-2"><SaveButton>Guardar fiscales</SaveButton></div>
+                </form>
+              )}
+            </ModuleCard>
           )}
         </>
       )}
@@ -821,34 +925,28 @@ export default async function ArtistDetail({
             </div>
           }
         >
-          {/* Mapa encima del listado (sólo con las actividades que estamos mostrando) */}
-          <ArtistActivitiesMap activities={activities as any[]} />
+          {/* Mapa encima del listado */}
+          <ActivitiesMap activities={activities as any[]} />
 
           {/* Listado */}
           <div className="divide-y divide-gray-200 mt-4">
-            {activities.map((ac: any) => {
-              const gc = (ac as any).group_company
-              return (
-                <Link
-                  key={ac.id}
-                  href={`/actividades/actividad/${ac.id}`}
-                  className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded"
-                >
-                  <div>
-                    <div className="font-medium">
-                      {ac.type === 'concert' ? 'Concierto' : ac.type}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {ac.status} · {ac.date ? new Date(ac.date).toLocaleDateString() : 'Sin fecha'} · {[ac.municipality, ac.province, ac.country].filter(Boolean).join(', ')}
-                    </div>
+            {activities.map((ac: any) => (
+              <Link
+                key={ac.id}
+                href={`/actividades/actividad/${ac.id}`}
+                className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded"
+              >
+                <div>
+                  <div className="font-medium">
+                    {ac.type} · {ac.date ? new Date(ac.date).toLocaleDateString() : 'Sin fecha'} · {[ac.municipality, ac.province, ac.country].filter(Boolean).join(', ')}
                   </div>
-                  {/* Logo empresa del grupo: SIN círculo, mantener proporción horizontal */}
-                  {gc?.logo_url
-                    ? <img src={gc.logo_url} alt="" className="h-8 w-auto object-contain" />
-                    : (gc?.nick || gc?.name) ? <span className="text-xs text-gray-600">{gc.nick || gc.name}</span> : null}
-                </Link>
-              )
-            })}
+                  <div className="text-xs text-gray-600">{ac.status}</div>
+                </div>
+                {ac.group_company?.logo_url
+                  ? <img src={ac.group_company.logo_url} alt="" className="h-8 w-auto object-contain" />
+                  : (ac.group_company?.nick || ac.group_company?.name) ? <span className="text-xs text-gray-600">{ac.group_company.nick || ac.group_company.name}</span> : null}
+              </Link>
+            ))}
             {!activities.length && (
               <div className="text-sm text-gray-500 py-3">Este artista aún no tiene actividades.</div>
             )}
