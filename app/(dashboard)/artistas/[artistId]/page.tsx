@@ -891,10 +891,26 @@ async function ArtistActivitiesBlock({ artistId, searchParams }: { artistId: str
   const from = searchParams.from
   const to = searchParams.to
   const [items, types] = await Promise.all([getArtistActivities({ artistId, q, type, from, to, past }), getActivityTypes()])
-  const mapData: ActivityForMap[] = items.map(a => ({
-    id: a.id, type: a.type || undefined, status: a.status || undefined, date: a.date || undefined,
-    municipality: a.municipality || undefined, province: a.province || undefined, country: a.country || undefined,
-  }))
+  // items = actividades del artista
+  const mapData: ActivityForMap[] = (items || []).map((a: any) => {
+    // Intentamos sacar coordenadas de varias posibles fuentes
+    const lat =
+      a.lat ?? a.latitude ?? a.venue_lat ??
+      (Array.isArray(a.venues) ? a.venues[0]?.lat : a.venues?.lat);
+    const lng =
+      a.lng ?? a.longitude ?? a.venue_lng ??
+      (Array.isArray(a.venues) ? a.venues[0]?.lng : a.venues?.lng);
+  
+    return {
+      id: a.id,
+      lat: typeof lat === 'number' ? lat : undefined,
+      lng: typeof lng === 'number' ? lng : undefined,
+      date: a.date ?? undefined,
+      status: a.status ?? undefined,
+      type: a.type ?? undefined,
+      href: `/actividades/actividad/${a.id}`,
+    };
+  });
   return (
     <ModuleCard
       title="Actividades"
