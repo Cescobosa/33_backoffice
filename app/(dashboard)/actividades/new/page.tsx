@@ -2,23 +2,19 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
+import ArtistPicker from '@/components/ArtistPicker'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-// Normaliza arrays de joins (por si a futuro añadimos joins aquí)
-function one<T>(x: T | T[] | null | undefined): T | undefined {
-  return Array.isArray(x) ? x[0] : (x ?? undefined)
-}
-
 function companyLabel(c: any) { return c?.nick || c?.name }
 
-export default async function NewActivity() {
+export default async function NewActivity({ searchParams }: { searchParams: { artistId?: string } }) {
   const s = createSupabaseServer()
 
   const { data: artists } = await s
     .from('artists')
-    .select('id, stage_name')
+    .select('id, stage_name, avatar_url')
     .order('stage_name', { ascending: true })
 
   const { data: companies } = await s
@@ -45,8 +41,7 @@ export default async function NewActivity() {
 
     const ins = await s.from('activities')
       .insert({ artist_id, type, status, date, time, municipality, province, country, company_id, capacity, pay_kind })
-      .select('id')
-      .single()
+      .select('id').single()
 
     if (ins.error) throw new Error(ins.error.message)
     redirect(`/actividades/actividad/${ins.data.id}`)
@@ -63,11 +58,14 @@ export default async function NewActivity() {
         <form action={createActivity} className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="md:col-span-2">
             <label className="block text-sm mb-1">Artista *</label>
-            <select name="artist_id" required className="w-full border rounded px-3 py-2" defaultValue="">
-              <option value="" disabled>Selecciona artista…</option>
-              {(artists || []).map((a: any) => <option key={a.id} value={a.id}>{a.stage_name}</option>)}
-            </select>
+            {/* Selector visual con foto */}
+            <ArtistPicker
+              name="artist_id"
+              artists={(artists || []) as any}
+              defaultId={searchParams?.artistId}
+            />
           </div>
+
           <div>
             <label className="block text-sm mb-1">Tipo</label>
             <select name="type" className="w-full border rounded px-3 py-2" defaultValue="concert">
@@ -96,6 +94,7 @@ export default async function NewActivity() {
 
           <div>
             <label className="block text-sm mb-1">Empresa del grupo</label>
+            {/* Logos de empresa: SIN círculo */}
             <select name="company_id" className="w-full border rounded px-3 py-2" defaultValue="">
               <option value="">(sin empresa)</option>
               {(companies || []).map((c: any) => (
