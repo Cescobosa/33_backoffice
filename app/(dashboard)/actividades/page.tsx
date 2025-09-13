@@ -1,176 +1,146 @@
 import Link from 'next/link'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import ModuleCard from '@/components/ModuleCard'
-import ActivitiesMap, { ActivityForMap } from '@/components/ActivitiesMap'
-import ActivityListItem, { ActivityListModel } from '@/components/ActivityListItem'
+import ActivitiesMap from '@/components/ActivitiesMap'
 
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
-type ActivityRow = {
-  id: string
-  type: string | null
-  status: string | null
-  date: string | null
-  municipality: string | null
-  province: string | null
-  country: string | null
-  artist_id: string | null
-  company_id: string | null
-}
-type ArtistLite = { id: string; stage_name: string | null; avatar_url: string | null }
-type CompanyLite = { id: string; name: string | null; nick: string | null; logo_url: string | null }
-
-function todayISO() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10) }
-
-async function getActivitiesAll({
-  artistId, companyId, q, type, from, to, past,
-}: {
-  artistId?: string
-  companyId?: string
-  q?: string
-  type?: string
-  from?: string
-  to?: string
-  past?: boolean
-}): Promise<ActivityListModel[]> {
-  const s = createSupabaseServer()
-  let qb = s.from('activities')
-    .select('id, type, status, date, municipality, province, country, artist_id, company_id')
-    .order('date', { ascending: !past })
-    .order('created_at', { ascending: false })
-
-  if (artistId) qb = qb.eq('artist_id', artistId)
-  if (companyId) qb = qb.eq('company_id', companyId)
-  if (type) qb = qb.eq('type', type)
-
-  if (past) {
-    const now = new Date()
-    const fromDef = new Date(now.getFullYear() - 1, 0, 1).toISOString().slice(0, 10)
-    qb = qb.lte('date', to || todayISO()).gte('date', from || fromDef)
-  } else {
-    qb = qb.gte('date', from || todayISO())
-    if (to) qb = qb.lte('date', to)
-  }
-
-  if (q) {
-    const like = `%${q}%`
-    qb = qb.or([
-      `municipality.ilike.${like}`,
-      `province.ilike.${like}`,
-      `country.ilike.${like}`,
-      `type.ilike.${like}`,
-      `status.ilike.${like}`,
-    ].join(','))
-  }
-
-  const { data: actsRaw, error } = await qb
-  if (error) throw new Error(error.message)
-  const acts = (actsRaw || []) as ActivityRow[]
-
-  const artistIds = Array.from(new Set(acts.map(a => a.artist_id).filter((x): x is string => !!x)))
-  const companyIds = Array.from(new Set(acts.map(a => a.company_id).filter((x): x is string => !!x)))
-
-  const artistsRes = artistIds.length
-    ? await s.from('artists').select('id, stage_name, avatar_url').in('id', artistIds)
-    : ({ data: [] } as { data: ArtistLite[] })
-
-  const companiesRes = companyIds.length
-    ? await s.from('group_companies').select('id, name, nick, logo_url').in('id', companyIds)
-    : ({ data: [] } as { data: CompanyLite[] })
-
-  const byArtist: Record<string, ArtistLite> =
-    Object.fromEntries(((artistsRes.data || []) as ArtistLite[]).map((a: ArtistLite) => [a.id, a] as const))
-  const byCompany: Record<string, CompanyLite> =
-    Object.fromEntries(((companiesRes.data || []) as CompanyLite[]).map((c: CompanyLite) => [c.id, c] as const))
-
-  const full: ActivityListModel[] = acts.map(a => ({
-    ...a,
-    artist: a.artist_id ? byArtist[a.artist_id] ?? null : null,
-    group_company: a.company_id ? byCompany[a.company_id] ?? null : null,
-  }))
-
-  return full
-}
-
-async function getTypes(): Promise<string[]> {
-  const s = createSupabaseServer()
-  const { data } = await s.from('activities').select('type').not('type', 'is', null).order('type', { ascending: true })
-  return Array.from(new Set((data || []).map((x: any) => x.type).filter(Boolean))) as string[]
-}
-
-export default async function ActivitiesPage({
+export default async function ActivitiesHome({
   searchParams,
 }: {
-  searchParams: { artistId?: string; companyId?: string; q?: string; type?: string; from?: string; to?: string; past?: string }
+  searchParams?: { view?: 'all' | 'artists'; artistId?: string; q?: string; type?: string; past?: string }
 }) {
-  const artistId = searchParams.artistId
-  const companyId = searchParams.companyId
-  const q = searchParams.q || ''
-  const type = searchParams.type || ''
-  const past = searchParams.past === '1'
-  const from = searchParams.from
-  const to = searchParams.to
+  const s = createSupabaseServer()
+  const view = (searchParams?.view as any) || 'artists'
+  const artistId = searchParams?.artistId || ''
+  const q = (searchParams?.q || '').trim()
+  const type = (searchParams?.type || '').trim()
+  const past = searchParams?.past === '1'
+  const today = new Date().toISOString().slice(0, 10)
 
-  const [items, types] = await Promise.all([getActivitiesAll({ artistId, companyId, q, type, from, to, past }), getTypes()])
+  // ===== artistas para selector =====
+  const { data: artists } = await s
+    .from('artists')
+    .select('id, stage_name, avatar_url')
+    .order('stage_name')
 
-  const mapData: ActivityForMap[] = items.map(a => ({
-    id: a.id, type: a.type || undefined, status: a.status || undefined, date: a.date || undefined,
-    municipality: a.municipality || undefined, province: a.province || undefined, country: a.country || undefined,
-  }))
+  // ===== actividades =====
+  let query = s
+    .from('activities')
+    .select(`
+      id, type, status, date, municipality, province, country, lat, lng,
+      artists(id,stage_name,avatar_url),
+      group_companies(id,logo_url,nick,name)
+    `)
+    .order('date', { ascending: true })
+
+  if (view === 'artists' && artistId) query = query.eq('artist_id', artistId)
+  if (!past) query = query.gte('date', today)
+  if (type) query = query.eq('type', type)
+  if (q && q.length >= 2) {
+    // Filtro seguro (campos de la propia tabla)
+    query = query.or(
+      `municipality.ilike.%${q}%,province.ilike.%${q}%,country.ilike.%${q}%,type.ilike.%${q}%`
+    )
+  }
+  const { data: acts } = await query
+
+  const points =
+    (acts || [])
+      .filter((a: any) => Number.isFinite(a.lat) && Number.isFinite(a.lng))
+      .map((a: any) => ({
+        id: a.id,
+        lat: a.lat,
+        lng: a.lng,
+        date: a.date,
+        status: a.status,
+        type: a.type,
+        href: `/actividades/actividad/${a.id}`,
+      })) || []
 
   return (
     <div className="space-y-6">
-      <ModuleCard
-        title={artistId ? 'Actividades del artista' : 'Todas las actividades'}
-        leftActions={
-          <div className="flex gap-2">
-            <Link className="btn" href={artistId ? `/actividades/new?artistId=${artistId}` : '/actividades/new'}>+ Nueva actividad</Link>
-            {!artistId && <Link className="btn-secondary" href="/artistas">Ver artistas</Link>}
-          </div>
-        }
-      >
-        {/* Filtros */}
-        <form className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4" method="get">
-          {artistId && <input type="hidden" name="artistId" value={artistId} />}
-          {companyId && <input type="hidden" name="companyId" value={companyId} />}
-          <div className="md:col-span-2">
-            <input name="q" defaultValue={q} placeholder="Buscar por ciudad, tipo, estado…"
-              className="w-full border rounded px-3 py-2" />
-          </div>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Actividades</h1>
+        <Link href="/actividades/new" className="btn">+ Nueva actividad</Link>
+      </div>
+
+      {/* Filtros superiores */}
+      <form className="flex flex-wrap gap-2 items-end">
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Vista</label>
+          <select name="view" defaultValue={view} className="border rounded px-3 py-2">
+            <option value="artists">Por artista</option>
+            <option value="all">Todas</option>
+          </select>
+        </div>
+
+        {view === 'artists' && (
           <div>
-            <select name="type" defaultValue={type} className="w-full border rounded px-3 py-2">
-              <option value="">Todos los tipos</option>
-              {types.map(t => <option key={t} value={t}>{t}</option>)}
+            <label className="block text-xs text-gray-600 mb-1">Artista</label>
+            <select name="artistId" defaultValue={artistId} className="border rounded px-3 py-2">
+              <option value="">(Selecciona artista)</option>
+              {(artists || []).map((a: any) => (
+                <option key={a.id} value={a.id}>{a.stage_name}</option>
+              ))}
             </select>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm">Desde</label>
-            <input type="date" name="from" defaultValue={from} className="border rounded px-2 py-1 w-full" />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm">Hasta</label>
-            <input type="date" name="to" defaultValue={to} className="border rounded px-2 py-1 w-full" />
-          </div>
-          <div className="md:col-span-5 flex items-center gap-2">
-            <button className="btn">Aplicar</button>
-            {!past ? (
-              <Link className="btn-secondary" href={{ pathname: '/actividades', query: { ...searchParams, past: '1' } }}>Ver pasadas</Link>
-            ) : (
-              <Link className="btn-secondary" href={{ pathname: '/actividades', query: { ...searchParams, past: undefined } }}>Ver futuras</Link>
-            )}
-            {!past && <span className="text-xs text-gray-500">Mostrando futuras por defecto</span>}
-          </div>
-        </form>
+        )}
 
-        {/* Mapa */}
-        <ActivitiesMap activities={mapData} />
-
-        {/* Listado */}
-        <div className="divide-y divide-gray-200 mt-4">
-          {items.map(a => <ActivityListItem key={a.id} a={a} showArtist={!artistId} />)}
-          {!items.length && <div className="text-sm text-gray-500 py-3">No hay actividades con estos filtros.</div>}
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Buscar</label>
+          <input name="q" defaultValue={q} placeholder="Ciudad, provincia, país, tipo…"
+                 className="border rounded px-3 py-2" />
         </div>
-      </ModuleCard>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Tipo</label>
+          <select name="type" defaultValue={type} className="border rounded px-3 py-2">
+            <option value="">Todos</option>
+            <option value="concert">Concierto</option>
+            <option value="festival">Festival</option>
+            <option value="promo">Promo</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Rango</label>
+          <select name="past" defaultValue={past ? '1' : ''} className="border rounded px-3 py-2">
+            <option value="">Futuras</option>
+            <option value="1">Pasadas</option>
+          </select>
+        </div>
+
+        <button className="btn">Aplicar</button>
+      </form>
+
+      {/* Mapa sobre el listado */}
+      <ActivitiesMap points={points} height={360} />
+
+      {/* Listado */}
+      <div className="divide-y divide-gray-200 mt-4">
+        {(acts || []).map((ac: any) => (
+          <Link key={ac.id} href={`/actividades/actividad/${ac.id}`}
+                className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
+            <div>
+              <div className="font-medium">{ac.type === 'concert' ? 'Concierto' : ac.type}</div>
+              <div className="text-sm text-gray-600">
+                {statusBadge(ac.status)} · {ac.date ? new Date(ac.date).toLocaleDateString() : 'Sin fecha'} ·
+                {' '}{[ac.municipality, ac.province, ac.country].filter(Boolean).join(', ')}
+              </div>
+            </div>
+            {view === 'all' && ac.artists?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={ac.artists.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover border" />
+            ) : null}
+          </Link>
+        ))}
+        {!acts?.length && <div className="text-sm text-gray-500 py-3">No hay actividades con estos filtros.</div>}
+      </div>
     </div>
   )
+}
+
+function statusBadge(s?: string | null) {
+  if (s === 'confirmed') return 'Confirmado'
+  if (s === 'hold') return 'Reserva'
+  return 'Borrador'
 }
