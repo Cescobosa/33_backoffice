@@ -321,7 +321,7 @@ export default async function ActivityDetail({ params }: { params: { activityId:
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">
-            Actividad · {artist?.stage_name} ({a.type === 'concert' ? 'Concierto' : a.type})
+            Actividad {artist?.stage_name} ({a.type === 'concert' ? 'Concierto' : a.type})
           </h1>
           <div className="text-sm text-gray-600">
             <Link href={`/artistas/${artist?.id}`} className="underline">Ir a la ficha del artista</Link>
