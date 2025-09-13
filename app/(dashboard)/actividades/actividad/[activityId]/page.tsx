@@ -5,6 +5,10 @@ import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
 
+import ActivityIncomeCreator from '@/components/ActivityIncomeCreator'
+import CompanySelect, { CompanyLite } from '@/components/CompanySelect'
+import SavedToast from '@/components/SavedToast'
+
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
@@ -64,6 +68,8 @@ export default async function ActivityDetail({ params }: { params: { activityId:
   const { data: locals } = await s.from('activity_local_productions').select('*').eq('activity_id', a.id)
   const { data: tech } = await s.from('activity_tech').select('*').eq('activity_id', a.id).maybeSingle()
   const { data: partners } = await s.from('activity_partners').select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick)').eq('activity_id', a.id)
+  const { data: companiesData } = await s.from('group_companies').select('id, name, nick, logo_url').order('name')
+  const companies = (companiesData || []) as CompanyLite[]
 
   // ========= Server Actions =========
 
@@ -87,7 +93,30 @@ export default async function ActivityDetail({ params }: { params: { activityId:
     if (error) throw new Error(error.message)
     revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
+  async function addIncome(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const kind = String(formData.get('kind') || 'fixed') as any
+    const amount = formData.get('amount') ? Number(formData.get('amount')) : null
+    const percent = formData.get('percent') ? Number(formData.get('percent')) : null
+    const rule_from_tickets = formData.get('from_tickets') ? Number(formData.get('from_tickets')) : null
+    const { error } = await s.from('activity_incomes').insert({
+      activity_id: params.activityId, kind, amount, percent, rule_from_tickets,
+    })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    redirect(`/actividades/actividad/${params.activityId}?saved=1&tab=ingresos`)
+  }
 
+  async function setCompany(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const company_id = String(formData.get('company_id') || '') || null
+    const { error } = await s.from('activities').update({ company_id }).eq('id', params.activityId)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+  }
   async function setCompany(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -336,21 +365,12 @@ export default async function ActivityDetail({ params }: { params: { activityId:
           </div>
         </form>
 
-        {/* Empresa del grupo (form separado; evita forms anidados) */}
-        <div className="mt-4">
-          <form action={setCompany} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Empresa del grupo</label>
-              <select name="company_id" defaultValue={gCompany?.id || ''} className="w-full border rounded px-3 py-2">
-                <option value="">(sin empresa)</option>
-                {(companies || []).map((c: any) => (
-                  <option key={c.id} value={c.id}>{companyLabel(c)}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-end"><button className="btn w-full">Guardar empresa</button></div>
-          </form>
-        </div>
+       {/* Empresa del grupo con logos */}
+      <ModuleCard title="Empresa del grupo">
+        <form action={setCompany} className="max-w-lg">
+          <CompanySelect name="company_id" companies={companies} defaultValue={a.group_companies?.id || a.company_id || null} />
+          <button className="btn mt-2">Guardar empresa</button>
+        </form>
       </ModuleCard>
 
       {/* PROMOTOR */}
@@ -371,40 +391,30 @@ export default async function ActivityDetail({ params }: { params: { activityId:
         )}
       </ModuleCard>
 
-      {/* INGRESOS */}
+      {/* Ingresos (dinámico) */}
       <ModuleCard title="Ingresos" leftActions={<span className="badge">Editar</span>}>
-        <form action={addIncome} className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-sm mb-1">Tipo</label>
-            <select name="kind" className="w-full border rounded px-2 py-1" defaultValue="fixed">
-              <option value="fixed">Caché fijo</option>
-              <option value="percent">Variable %</option>
-              <option value="per_ticket">Importe por entrada</option>
-              <option value="other">Otro</option>
-            </select>
-          </div>
-          <div><label className="block text-sm mb-1">Etiqueta (opcional)</label><input name="label" className="w-full border rounded px-2 py-1" /></div>
-          <div><label className="block text-sm mb-1">Importe</label><input name="amount" type="number" step="0.01" className="w-full border rounded px-2 py-1" /></div>
-          <div><label className="block text-sm mb-1">% / tickets desde</label><input name="percent" type="number" step="0.01" className="w-full border rounded px-2 py-1" placeholder="%"/> <input name="from_tickets" type="number" className="w-full border rounded px-2 py-1 mt-1" placeholder="desde entradas"/></div>
-          <div className="md:col-span-4">
-            <label className="block text-sm mb-1">Base</label>
-            <select name="base" className="w-full border rounded px-2 py-1" defaultValue="gross">
-              <option value="gross">Bruto</option>
-              <option value="net">Neto</option>
-            </select>
-          </div>
-          <div className="md:col-span-4"><button className="btn">+ Añadir</button></div>
-        </form>
-
-        <div className="divide-y divide-gray-200 mt-3">
-          {(incomes || []).map((i: any) => (
+        <ActivityIncomeCreator actionAdd={addIncome} />
+      
+        <div className="divide-y divide-gray-200 mt-4">
+          {(incomes || []).map(i => (
             <div key={i.id} className="py-2 text-sm">
-              <span className="font-medium">{i.kind}</span> · {i.amount ? `${Number(i.amount).toLocaleString('es-ES',{style:'currency',currency:'EUR'})}` : ''} {i.percent ? `· ${i.percent}%` : ''} {i.base ? `· ${i.base}` : ''} {i.rule_from_tickets ? `· desde ${i.rule_from_tickets} entradas` : ''}
+              <span className="font-medium">
+                {i.kind === 'fixed' ? 'Caché fijo' :
+                 i.kind === 'variable_fixed_after' ? 'Variable · fijo desde N' :
+                 i.kind === 'per_ticket' ? 'Variable · por entrada' :
+                 i.kind === 'percent' ? 'Variable · % sobre ventas' : i.kind}
+              </span>
+              {' · '}
+              {i.amount ? `${Number(i.amount).toLocaleString('es-ES',{style:'currency',currency:'EUR'})}` : ''}
+              {i.percent ? ` · ${i.percent}%` : ''}
+              {i.rule_from_tickets ? ` · desde ${i.rule_from_tickets} entradas` : ''}
             </div>
           ))}
           {!incomes?.length && <div className="text-sm text-gray-500">Sin ingresos configurados.</div>}
         </div>
       </ModuleCard>
+      
+      <SavedToast show={searchParams?.saved === '1'} />
 
       {/* AGENTE DE ZONA */}
       <ModuleCard title="Agente de zona" leftActions={<span className="badge">Editar</span>}>
