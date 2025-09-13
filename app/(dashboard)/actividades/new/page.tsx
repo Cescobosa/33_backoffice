@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import ArtistPicker from '@/components/ArtistPicker'
+import { revalidateApp } from '@/lib/revalidateApp'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -44,6 +45,13 @@ export default async function NewActivity({ searchParams }: { searchParams: { ar
       .select('id').single()
 
     if (ins.error) throw new Error(ins.error.message)
+
+    await revalidateApp([
+      '/actividades',
+      `/actividades/artista/${artist_id}`,
+      `/artistas/${artist_id}?tab=actividades`,
+    ])
+
     redirect(`/actividades/actividad/${ins.data.id}`)
   }
 
@@ -58,7 +66,6 @@ export default async function NewActivity({ searchParams }: { searchParams: { ar
         <form action={createActivity} className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="md:col-span-2">
             <label className="block text-sm mb-1">Artista *</label>
-            {/* Selector visual con foto */}
             <ArtistPicker
               name="artist_id"
               artists={(artists || []) as any}
