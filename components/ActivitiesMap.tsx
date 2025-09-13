@@ -1,141 +1,182 @@
 'use client'
 
+/**
+ * Mapa liviano basado en Leaflet con pins “píldora” sin recortes ni deformaciones.
+ * No requiere importar 'leaflet/dist/leaflet.css' en el bundle: incluye CSS mínimo embebido.
+ */
+
 import { useEffect, useRef } from 'react'
 
-export type ActivityForMap = {
+type Point = {
   id: string
-  type?: string
-  status?: string
-  date?: string
-  municipality?: string
-  province?: string
-  country?: string
+  lat: number
+  lng: number
+  date?: string | null
+  status?: 'draft' | 'hold' | 'confirmed' | string | null
+  type?: string | null
+  href: string
 }
 
-declare global {
-  interface Window {
-    L?: any
-  }
-}
-
-// Carga Leaflet JS + CSS desde CDN (sin dependencias npm)
-function ensureLeaflet(): Promise<any> {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined') return
-    if (window.L) return resolve(window.L)
-
-    // CSS
-    if (!document.querySelector('link[data-leaflet-css]')) {
-      const link = document.createElement('link')
-      link.rel = 'stylesheet'
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-      link.setAttribute('data-leaflet-css', '1')
-      document.head.appendChild(link)
-    }
-    // JS
-    const existing = document.querySelector('script[data-leaflet-js]') as HTMLScriptElement | null
-    if (existing && window.L) return resolve(window.L)
-    if (existing && !window.L) {
-      existing.addEventListener('load', () => resolve(window.L))
-      return
-    }
-    const script = document.createElement('script')
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-    script.async = true
-    script.defer = true
-    script.setAttribute('data-leaflet-js', '1')
-    script.onload = () => resolve(window.L)
-    document.body.appendChild(script)
-  })
-}
-
-function markerHtml(a: ActivityForMap) {
-  const d = a.date ? new Date(a.date) : null
-  const day = d ? String(d.getDate()).padStart(2, '0') : ''
-  const mon = d ? d.toLocaleString('es-ES', { month: 'short' }).toUpperCase() : ''
-  const status = (a.status || '').toLowerCase()
-  const border =
-    status === 'confirmed' ? '#16a34a' : status === 'hold' || status === 'draft' ? '#f59e0b' : '#9ca3af'
-  const icon =
-    a.type === 'concert' ? '🎤' :
-    a.type === 'promo_event' ? '📣' :
-    a.type === 'record_investment' ? '💿' : '⭐'
-  return `
-    <div style="border:2px solid ${border}; background:white; border-radius:8px; padding:2px 6px; font-size:11px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.25);">
-      <div style="font-weight:700">${mon}</div>
-      <div style="font-size:14px; font-weight:800; line-height:1">${day}</div>
-      <div style="font-size:12px">${icon}</div>
-    </div>
-  `
-}
-
-export default function ActivitiesMap({ activities }: { activities: ActivityForMap[] }) {
-  const ref = useRef<HTMLDivElement>(null)
+export default function ActivitiesMap({
+  points,
+  height = 360,
+  zoom = 5,
+}: { points: Point[]; height?: number; zoom?: number }) {
+  const mapEl = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let map: any
+    let L: any
     let markers: any[] = []
-    let aborted = false
 
-    async function run() {
-      const L = await ensureLeaflet()
-      if (aborted || !ref.current) return
+    ;(async () => {
+      const leaflet = await import('leaflet')
+      L = leaflet.default || leaflet
+      // Evita icono por defecto roto en Next
+      delete (L.Icon.Default as any).prototype._getIconUrl
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl:
+          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl:
+          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl:
+          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      })
 
-      map = L.map(ref.current).setView([40.4168, -3.7038], 5)
+      if (!mapEl.current) return
+      map = L.map(mapEl.current, {
+        zoomControl: true,
+        attributionControl: false,
+      })
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap',
         maxZoom: 18,
       }).addTo(map)
 
-      // Agrupamos por lugar (para minimizar geocodificaciones)
-      const groups = new Map<string, ActivityForMap[]>()
-      for (const a of activities) {
-        const key = [a.municipality, a.province, a.country].filter(Boolean).join(', ')
-        if (!key) continue
-        const arr = groups.get(key) || []
-        arr.push(a)
-        groups.set(key, arr)
+      const valid = points.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      if (valid.length) {
+        const b = L.latLngBounds(valid.map((p) => [p.lat, p.lng] as [number, number]))
+        map.fitBounds(b.pad(0.2))
+      } else {
+        map.setView([40.4168, -3.7038], zoom) // España por defecto
       }
 
-      const ctrls: AbortController[] = []
+      const mk = (p: Point) => {
+        const color =
+          p.status === 'confirmed' ? '#22c55e' : p.status === 'hold' || p.status === 'draft' ? '#f59e0b' : '#94a3b8'
+        const dateLabel = p.date
+          ? new Date(p.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).toUpperCase()
+          : 'S/F'
+        const typeIcon = iconForType(p.type)
 
-      async function geocode(place: string): Promise<[number, number] | null> {
-        try {
-          const ac = new AbortController()
-          ctrls.push(ac)
-          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`
-          const res = await fetch(url, {
-            signal: ac.signal,
-            headers: { 'Accept-Language': 'es', 'User-Agent': '33-Backoffice/1.0' },
-          })
-          const json = await res.json()
-          if (json && json[0]) return [parseFloat(json[0].lat), parseFloat(json[0].lon)]
-          return null
-        } catch {
-          return null
+        const html = `
+          <a class="act-pin" href="${p.href}" target="_self" style="border-color:${color}">
+            <span class="act-pin__date">${dateLabel}</span>
+            <span class="act-pin__sep">·</span>
+            <span class="act-pin__type">${typeIcon}</span>
+          </a>
+        `
+        const divIcon = L.divIcon({
+          className: 'act-div-icon',
+          html,
+          iconSize: undefined, // tamaño según contenido (no se recorta)
+        })
+        const m = L.marker([p.lat, p.lng], {
+          icon: divIcon,
+          zIndexOffset: p.status === 'confirmed' ? 1000 : 0,
+        })
+        m.addTo(map)
+        markers.push(m)
+      }
+
+      valid.forEach(mk)
+    })()
+
+    return () => {
+      try {
+        markers.forEach((m) => m.remove?.())
+        // @ts-ignore
+        if (mapEl.current && (mapEl.current as any)._leaflet_id) {
+          // @ts-ignore
+          mapEl.current._leaflet_id = null
         }
-      }
-
-      for (const [place, acts] of groups.entries()) {
-        const ll = await geocode(place)
-        if (!ll) continue
-        for (const a of acts) {
-          const icon = L.divIcon({ html: markerHtml(a), className: '' })
-          const m = L.marker(ll, { icon }).addTo(map)
-          m.on('click', () => { window.location.href = `/actividades/actividad/${a.id}` })
-          markers.push(m)
-        }
-      }
-
-      if (markers.length) {
-        const fg = L.featureGroup(markers)
-        map.fitBounds(fg.getBounds().pad(0.2))
-      }
+      } catch {}
     }
+  }, [points, zoom])
 
-    run()
-    return () => { aborted = true; if (map) map.remove() }
-  }, [activities])
+  return (
+    <div style={{ height }} ref={mapEl}>
+      {/* CSS mínimo Leaflet + estilo de pin “píldora” */}
+      <style jsx global>{`
+        .leaflet-container {
+          width: 100%;
+          height: 100%;
+          touch-action: pan-x pan-y;
+          font: 12px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        }
+        .leaflet-pane,
+        .leaflet-tile,
+        .leaflet-marker-icon,
+        .leaflet-marker-shadow,
+        .leaflet-tile-container,
+        .leaflet-pane > svg,
+        .leaflet-pane > canvas {
+          position: absolute;
+          left: 0;
+          top: 0;
+        }
+        .leaflet-marker-icon,
+        .leaflet-div-icon {
+          background: transparent;
+          border: 0;
+        }
 
-  return <div ref={ref} className="w-full h-80 rounded border" />
+        .act-div-icon {
+          overflow: visible; /* evita cortes */
+        }
+
+        .act-pin {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 8px;
+          background: #fff;
+          border: 2px solid #e5e7eb;
+          border-radius: 9999px;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+          text-decoration: none;
+          color: #111827;
+          white-space: nowrap; /* no se corta el texto */
+          transform: translate(-50%, -100%); /* ancla desde la base */
+        }
+        .act-pin__date {
+          font-weight: 700;
+          font-size: 12px;
+          letter-spacing: 0.3px;
+        }
+        .act-pin__sep {
+          color: #94a3b8;
+        }
+        .act-pin__type {
+          font-size: 12px;
+          font-weight: 600;
+          color: #334155;
+          text-transform: capitalize;
+        }
+      `}</style>
+    </div>
+  )
+}
+
+function iconForType(type?: string | null) {
+  if (!type) return 'Actividad'
+  switch (type) {
+    case 'concert':
+      return 'Concierto'
+    case 'promo':
+      return 'Promo'
+    case 'festival':
+      return 'Festival'
+    default:
+      return type
+  }
 }
