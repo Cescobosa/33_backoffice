@@ -1,84 +1,97 @@
 'use client'
-import { useEffect, useState } from 'react'
 
-type Item = { id: string; nick?: string | null; legal_name: string; logo_url?: string | null }
+import { useEffect, useMemo, useState } from 'react'
 
-export default function CounterpartyPicker({
-  nameHiddenId = 'counterparty_id',
-  nameHiddenMode = 'mode' // "existing" | "create"
-}: {
-  nameHiddenId?: string
-  nameHiddenMode?: string
-}) {
+type Row = { id: string; label: string; sub?: string; logo_url?: string; kind: 'counterparty'|'company' }
+
+export default function CounterpartyPicker({ includeCompanies = false }: { includeCompanies?: boolean }) {
+  const [mode, setMode] = useState<'existing'|'create'>('existing')
   const [q, setQ] = useState('')
-  const [items, setItems] = useState<Item[]>([])
-  const [picked, setPicked] = useState<Item | null>(null)
-  const [createOpen, setCreateOpen] = useState(false)
+  const [items, setItems] = useState<Row[]>([])
+  const [selected, setSelected] = useState<Row | null>(null)
 
+  // Carga inicial (lista grande cacheada en cliente para filtro rápido)
   useEffect(() => {
-    if (!q) { setItems([]); return }
-    const ctrl = new AbortController()
-    const t = setTimeout(async () => {
-      const res = await fetch(`/api/search/counterparties?q=${encodeURIComponent(q)}&kind=third`, { signal: ctrl.signal })
-      if (res.ok) setItems(await res.json())
-    }, 180)
-    return () => { clearTimeout(t); ctrl.abort() }
-  }, [q])
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/_pickers/counterparties?q=' + encodeURIComponent('') + (includeCompanies ? '&companies=1' : ''))
+        const json = await res.json()
+        if (alive) setItems(json as Row[])
+      } catch { /* noop */ }
+    })()
+    return () => { alive = false }
+  }, [includeCompanies])
 
-  useEffect(() => {
-    setCreateOpen(!picked && q.length > 1 && items.length === 0)
-  }, [picked, q, items])
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return items.slice(0, 50)
+    return items.filter((i) =>
+      i.label.toLowerCase().includes(term) || (i.sub || '').toLowerCase().includes(term)
+    ).slice(0, 50)
+  }, [items, q])
 
   return (
     <div className="space-y-3">
-      {/* inputs ocultos que viajan con el form */}
-      <input type="hidden" name={nameHiddenMode} value={picked ? 'existing' : (createOpen ? 'create' : '')} />
-      <input type="hidden" name={nameHiddenId} value={picked?.id || ''} />
-
-      <div className="relative">
-        <input
-          value={q}
-          onChange={(e) => { setQ(e.target.value); setPicked(null) }}
-          placeholder="Buscar tercero (por nombre, nick o DNI/CIF)"
-          className="w-full border rounded px-3 py-2"
-        />
-        {!!items.length && (
-          <div className="absolute z-10 bg-white border rounded w-full mt-1 max-h-64 overflow-auto">
-            {items.map(it => (
-              <button
-                key={it.id}
-                type="button"
-                onClick={() => { setPicked(it); setItems([]); }}
-                className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={it.logo_url || '/avatar.png'} className="w-6 h-6 rounded-full border object-cover" alt="" />
-                <span className="font-medium">{it.nick || it.legal_name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="flex items-center gap-4">
+        <label className="text-sm"><input type="radio" name="mode" value="existing" checked={mode==='existing'} onChange={()=>setMode('existing')} /> Elegir existente</label>
+        <label className="text-sm"><input type="radio" name="mode" value="create" checked={mode==='create'} onChange={()=>setMode('create')} /> Crear nuevo</label>
       </div>
 
-      {picked && (
-        <div className="text-sm text-gray-600">
-          Seleccionado: <span className="font-medium">{picked.nick || picked.legal_name}</span>
-          <button type="button" className="ml-3 underline" onClick={() => setPicked(null)}>Cambiar</button>
-        </div>
-      )}
+      {mode === 'existing' ? (
+        <>
+          <input type="hidden" name="counterparty_id" value={selected?.kind === 'counterparty' ? selected.id : ''} />
+          <input type="hidden" name="selected_company_id" value={selected?.kind === 'company' ? selected.id : ''} />
 
-      {createOpen && !picked && (
-        <div className="border rounded p-3">
-          <div className="text-sm font-medium mb-2">No hay coincidencias. Crear nuevo tercero:</div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <input name="legal_name" placeholder="Nombre / Razón social *" required className="border rounded px-2 py-1" />
-            <select name="kind" className="border rounded px-2 py-1">
+          <div className="relative">
+            <input
+              placeholder="Busca por nombre, nick o CIF"
+              className="w-full border rounded px-3 py-2"
+              value={q} onChange={(e) => setQ(e.target.value)}
+            />
+            <div className="absolute z-10 bg-white border rounded mt-1 w-full max-h-64 overflow-auto">
+              {filtered.map((r) => (
+                <button
+                  key={`${r.kind}-${r.id}`}
+                  type="button"
+                  onClick={() => setSelected(r)}
+                  className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2 ${selected?.id === r.id && selected.kind === r.kind ? 'bg-gray-50' : ''}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={r.logo_url || '/avatar.png'} alt="" className="h-6 w-6 object-contain rounded border" />
+                  <div>
+                    <div className="text-sm font-medium">{r.label}</div>
+                    <div className="text-xs text-gray-600">{r.sub}</div>
+                  </div>
+                  <span className="ml-auto text-[10px] px-1.5 py-0.5 border rounded">{r.kind === 'company' ? 'Empresa' : 'Tercero'}</span>
+                </button>
+              ))}
+              {!filtered.length && <div className="px-3 py-2 text-sm text-gray-500">Sin resultados.</div>}
+            </div>
+            {selected && (
+              <div className="text-xs text-gray-600 mt-2">
+                Seleccionado: <strong>{selected.label}</strong> ({selected.kind === 'company' ? 'Empresa' : 'Tercero'})
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-sm mb-1">Tipo</label>
+            <select name="kind" className="w-full border rounded px-2 py-1">
               <option value="person">Particular</option>
               <option value="company">Empresa</option>
             </select>
-            <input name="tax_id" placeholder="DNI / CIF (opcional)" className="border rounded px-2 py-1" />
           </div>
-          <div className="text-xs text-gray-500 mt-2">Se guardará como Tercero y podrás completarlo luego.</div>
+          <div className="md:col-span-2">
+            <label className="block text-sm mb-1">Nombre / Razón social</label>
+            <input name="legal_name" className="w-full border rounded px-3 py-2" />
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-sm mb-1">CIF / DNI (opcional)</label>
+            <input name="tax_id" className="w-full border rounded px-3 py-2" />
+          </div>
         </div>
       )}
     </div>
