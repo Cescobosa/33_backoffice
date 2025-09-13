@@ -3,12 +3,13 @@
 /**
  * Mapa de actividades sin dependencias NPM.
  * Carga Leaflet desde CDN (JS + CSS) y usa window.L.
- * Pins tipo "píldora" con borde por estado y tamaño fluido (no se cortan).
+ * Exporta el tipo ActivityForMap para tipar los puntos desde las páginas.
  */
 
 import { useEffect, useRef } from 'react'
 
-type Point = {
+/** === Tipo que usas en las páginas === */
+export type ActivityForMap = {
   id: string
   lat: number
   lng: number
@@ -24,17 +25,15 @@ declare global {
   }
 }
 
-const LJS =
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-const LCSS =
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+const LJS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+const LCSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
 
 function loadLeafletFromCDN(): Promise<any> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined') return reject(new Error('SSR'))
     if (window.L) return resolve(window.L)
 
-    // Inyecta CSS si no está
+    // CSS
     if (!document.querySelector(`link[href="${LCSS}"]`)) {
       const link = document.createElement('link')
       link.rel = 'stylesheet'
@@ -43,14 +42,14 @@ function loadLeafletFromCDN(): Promise<any> {
       document.head.appendChild(link)
     }
 
-    // Inyecta JS si no está
+    // JS
     const existing = document.querySelector(`script[src="${LJS}"]`) as HTMLScriptElement | null
-    if (existing && (window as any).L) return resolve((window as any).L)
+    if (existing && window.L) return resolve(window.L)
 
     const script = existing ?? document.createElement('script')
     script.src = LJS
     script.async = true
-    script.onload = () => resolve((window as any).L)
+    script.onload = () => resolve(window.L)
     script.onerror = (e) => reject(e)
     if (!existing) document.body.appendChild(script)
   })
@@ -74,7 +73,11 @@ export default function ActivitiesMap({
   points,
   height = 360,
   zoom = 5,
-}: { points: Point[]; height?: number; zoom?: number }) {
+}: {
+  points: ActivityForMap[]
+  height?: number
+  zoom?: number
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const markersRef = useRef<any[]>([])
@@ -87,7 +90,6 @@ export default function ActivitiesMap({
         const L = await loadLeafletFromCDN()
         if (cancelled || !ref.current) return
 
-        // Crea el mapa una única vez
         if (!mapRef.current) {
           mapRef.current = L.map(ref.current, {
             zoomControl: true,
@@ -98,23 +100,21 @@ export default function ActivitiesMap({
           }).addTo(mapRef.current)
         }
 
-        // Limpia marcadores anteriores
+        // Limpia y pinta
         markersRef.current.forEach((m) => m.remove?.())
         markersRef.current = []
 
-        const valid = points.filter(
+        const valid = (points || []).filter(
           (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
         )
 
-        // Ajusta la vista
         if (valid.length) {
           const bounds = L.latLngBounds(valid.map((p) => [p.lat, p.lng] as [number, number]))
           mapRef.current.fitBounds(bounds.pad(0.2))
         } else {
-          mapRef.current.setView([40.4168, -3.7038], zoom) // Centro España
+          mapRef.current.setView([40.4168, -3.7038], zoom) // centro ES
         }
 
-        // Crea pins
         valid.forEach((p) => {
           const color =
             p.status === 'confirmed'
@@ -137,11 +137,13 @@ export default function ActivitiesMap({
               <span class="act-pin__type">${labelForType(p.type)}</span>
             </a>
           `
+
           const icon = L.divIcon({
             className: 'act-div-icon',
             html,
-            iconSize: undefined, // tamaño según contenido (no se recorta)
+            iconSize: undefined, // deja que el contenido defina el tamaño → no se corta
           })
+
           const m = L.marker([p.lat, p.lng], {
             icon,
             zIndexOffset: p.status === 'confirmed' ? 1000 : 0,
@@ -150,7 +152,6 @@ export default function ActivitiesMap({
           markersRef.current.push(m)
         })
       } catch (err) {
-        // Si falla la carga del CDN no rompemos la página
         console.error('Leaflet CDN load error', err)
       }
     })()
@@ -162,7 +163,6 @@ export default function ActivitiesMap({
 
   return (
     <div ref={ref} style={{ height }}>
-      {/* Estilos mínimos del contenedor + pin “píldora”. No se deforma ni se corta. */}
       <style jsx global>{`
         .leaflet-container {
           width: 100%;
@@ -171,7 +171,7 @@ export default function ActivitiesMap({
           touch-action: pan-x pan-y;
         }
         .act-div-icon {
-          overflow: visible; /* evita cortes del contenido */
+          overflow: visible; /* evita el recorte del HTML interno */
         }
         .act-pin {
           display: inline-flex;
@@ -184,8 +184,8 @@ export default function ActivitiesMap({
           box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
           text-decoration: none;
           color: #111827;
-          white-space: nowrap; /* no se parte el texto */
-          transform: translate(-50%, -100%); /* ancla desde la base del pin */
+          white-space: nowrap;       /* no cortar texto */
+          transform: translate(-50%, -100%); /* ancla al punto geográfico */
         }
         .act-pin__date {
           font-weight: 700;
