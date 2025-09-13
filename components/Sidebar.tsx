@@ -6,7 +6,7 @@ const items = [
   { href: '/artistas', label: 'Artistas' },
   { href: '/terceros', label: 'Terceros' },
   { href: '/proveedores', label: 'Proveedores' },
-  { href: '/empresas', label: 'Empresas' },
+  { href: '/empresas', label: 'Empresas del grupo' },
   { href: '/actividades', label: 'Actividades' },
   { href: '/usuarios', label: 'Usuarios' },
 ]
