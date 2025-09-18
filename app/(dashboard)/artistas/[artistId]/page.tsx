@@ -953,7 +953,7 @@ async function ArtistActivitiesBlock({ artistId, searchParams }: { artistId: str
         </div>
       </form>
 
-      <ActivitiesMap activities={mapData} />
+      <ActivitiesMap points={mapData} />
       <div className="divide-y divide-gray-200 mt-4">
         {items.map(a => <ActivityListItem key={a.id} a={a} showArtist={false} />)}
         {!items.length && <div className="text-sm text-gray-500 py-3">Este artista no tiene actividades con estos filtros.</div>}
