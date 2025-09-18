@@ -891,26 +891,31 @@ async function ArtistActivitiesBlock({ artistId, searchParams }: { artistId: str
   const from = searchParams.from
   const to = searchParams.to
   const [items, types] = await Promise.all([getArtistActivities({ artistId, q, type, from, to, past }), getActivityTypes()])
-  // items = actividades del artista
-  const mapData: ActivityForMap[] = (items || []).map((a: any) => {
-    // Intentamos sacar coordenadas de varias posibles fuentes
-    const lat =
+
+  // Construcción del mapa: sólo empujamos puntos con lat/lng numéricos
+  const mapData: ActivityForMap[] = (items || []).reduce((acc: ActivityForMap[], a: any) => {
+    const latCandidate =
       a.lat ?? a.latitude ?? a.venue_lat ??
-      (Array.isArray(a.venues) ? a.venues[0]?.lat : a.venues?.lat);
-    const lng =
+      (Array.isArray(a.venues) ? a.venues[0]?.lat : a.venues?.lat)
+    const lngCandidate =
       a.lng ?? a.longitude ?? a.venue_lng ??
-      (Array.isArray(a.venues) ? a.venues[0]?.lng : a.venues?.lng);
-  
-    return {
-      id: a.id,
-      lat: typeof lat === 'number' ? lat : undefined,
-      lng: typeof lng === 'number' ? lng : undefined,
-      date: a.date ?? undefined,
-      status: a.status ?? undefined,
-      type: a.type ?? undefined,
-      href: `/actividades/actividad/${a.id}`,
-    };
-  });
+      (Array.isArray(a.venues) ? a.venues[0]?.lng : a.venues?.lng)
+
+    if (typeof latCandidate === 'number' && !Number.isNaN(latCandidate) &&
+        typeof lngCandidate === 'number' && !Number.isNaN(lngCandidate)) {
+      acc.push({
+        id: a.id,
+        lat: latCandidate,
+        lng: lngCandidate,
+        date: a.date ?? undefined,
+        status: a.status ?? undefined,
+        type: a.type ?? undefined,
+        href: `/actividades/actividad/${a.id}`,
+      })
+    }
+    return acc
+  }, [])
+
   return (
     <ModuleCard
       title="Actividades"
