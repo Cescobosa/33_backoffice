@@ -1,89 +1,72 @@
+// app/(dashboard)/actividades/new/page.tsx
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import ArtistPicker from '@/components/ArtistPicker'
-import { revalidateApp } from '@/lib/revalidateApp'
+import { revalidatePath } from 'next/cache'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-function companyLabel(c: any) { return c?.nick || c?.name }
-
-export default async function NewActivity({ searchParams }: { searchParams: { artistId?: string } }) {
-  const s = createSupabaseServer()
-
-  const { data: artists } = await s
-    .from('artists')
-    .select('id, stage_name, avatar_url')
-    .order('stage_name', { ascending: true })
-
-  const { data: companies } = await s
-    .from('group_companies')
-    .select('id, nick, name, logo_url')
-    .order('nick', { ascending: true })
+export default function NewActivity({ searchParams }: { searchParams: { artistId?: string } }) {
 
   async function createActivity(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
     const artist_id = String(formData.get('artist_id') || '')
-    const type = String(formData.get('type') || 'concert') as any
-    const status = String(formData.get('status') || 'draft') as any
+    const type = String(formData.get('type') || 'concert')
+    const status = String(formData.get('status') || 'draft')
     const date = String(formData.get('date') || '') || null
     const time = String(formData.get('time') || '') || null
     const municipality = String(formData.get('municipality') || '').trim() || null
     const province = String(formData.get('province') || '').trim() || null
     const country = String(formData.get('country') || 'España').trim()
-    const company_id = String(formData.get('company_id') || '') || null
     const capacity = formData.get('capacity') ? Number(formData.get('capacity')) : null
-    const pay_kind = String(formData.get('pay_kind') || 'pay') as any
+    const pay_kind = String(formData.get('pay_kind') || 'pay')
 
-    if (!artist_id) throw new Error('Debes seleccionar un artista')
+    const latStr = String(formData.get('lat') || '').trim()
+    const lngStr = String(formData.get('lng') || '').trim()
+    const lat = latStr ? Number(latStr) : null
+    const lng = lngStr ? Number(lngStr) : null
 
-    const ins = await s.from('activities')
-      .insert({ artist_id, type, status, date, time, municipality, province, country, company_id, capacity, pay_kind })
-      .select('id').single()
+    if (!artist_id || !date) throw new Error('Artista y fecha son obligatorios')
 
-    if (ins.error) throw new Error(ins.error.message)
+    const { error } = await s.from('activities').insert({
+      artist_id, type, status, date, time, municipality, province, country, capacity, pay_kind, lat, lng,
+    })
+    if (error) throw new Error(error.message)
 
-    await revalidateApp([
-      '/actividades',
-      `/actividades/artista/${artist_id}`,
-      `/artistas/${artist_id}?tab=actividades`,
-    ])
-
-    redirect(`/actividades/actividad/${ins.data.id}`)
+    revalidatePath('/actividades')
+    const back = searchParams.artistId
+      ? `/actividades?artistId=${searchParams.artistId}&saved=1`
+      : '/actividades?saved=1'
+    redirect(back)
   }
+
+  const defaultArtistId = searchParams.artistId || ''
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Nueva actividad</h1>
-        <Link className="btn-secondary" href="/actividades">Volver</Link>
+        <Link href="/actividades" className="btn-secondary">Cancelar</Link>
       </div>
 
-      <ModuleCard title="Datos iniciales">
+      <ModuleCard title="Datos básicos">
         <form action={createActivity} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-sm mb-1">Artista *</label>
-            <ArtistPicker
-              name="artist_id"
-              artists={(artists || []) as any}
-              defaultId={searchParams?.artistId}
-            />
+            <input name="artist_id" defaultValue={defaultArtistId} className="w-full border rounded px-3 py-2" placeholder="UUID del artista" />
           </div>
-
           <div>
             <label className="block text-sm mb-1">Tipo</label>
             <select name="type" className="w-full border rounded px-3 py-2" defaultValue="concert">
               <option value="concert">Concierto</option>
-              <option value="promo_event">Evento promocional</option>
-              <option value="promotion">Promoción</option>
-              <option value="record_investment">Inversión discográfica</option>
-              <option value="custom">Otro</option>
+              <option value="festival">Festival</option>
+              <option value="promo">Promo</option>
+              <option value="otro">Otro</option>
             </select>
           </div>
-
           <div>
             <label className="block text-sm mb-1">Estado</label>
             <select name="status" className="w-full border rounded px-3 py-2" defaultValue="draft">
@@ -92,33 +75,34 @@ export default async function NewActivity({ searchParams }: { searchParams: { ar
               <option value="confirmed">Confirmado</option>
             </select>
           </div>
-          <div><label className="block text-sm mb-1">Fecha</label><input type="date" name="date" className="w-full border rounded px-3 py-2" /></div>
-          <div><label className="block text-sm mb-1">Hora</label><input type="time" name="time" className="w-full border rounded px-3 py-2" /></div>
-
-          <div><label className="block text-sm mb-1">Municipio</label><input name="municipality" className="w-full border rounded px-3 py-2" /></div>
-          <div><label className="block text-sm mb-1">Provincia</label><input name="province" className="w-full border rounded px-3 py-2" /></div>
-          <div><label className="block text-sm mb-1">País</label><input name="country" defaultValue="España" className="w-full border rounded px-3 py-2" /></div>
 
           <div>
-            <label className="block text-sm mb-1">Empresa del grupo</label>
-            {/* Logos de empresa: SIN círculo */}
-            <select name="company_id" className="w-full border rounded px-3 py-2" defaultValue="">
-              <option value="">(sin empresa)</option>
-              {(companies || []).map((c: any) => (
-                <option value={c.id} key={c.id}>{companyLabel(c)}</option>
-              ))}
-            </select>
+            <label className="block text-sm mb-1">Fecha *</label>
+            <input type="date" name="date" className="w-full border rounded px-3 py-2" />
           </div>
-          <div><label className="block text-sm mb-1">Aforo</label><input type="number" name="capacity" className="w-full border rounded px-3 py-2" /></div>
           <div>
-            <label className="block text-sm mb-1">Pago/Gratuito</label>
+            <label className="block text-sm mb-1">Hora</label>
+            <input type="time" name="time" className="w-full border rounded px-3 py-2" />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Pago/Gratis</label>
             <select name="pay_kind" className="w-full border rounded px-3 py-2" defaultValue="pay">
               <option value="pay">Pago</option>
               <option value="free">Gratuito</option>
             </select>
           </div>
 
-          <div className="md:col-span-3"><button className="btn">Crear actividad</button></div>
+          <div><label className="block text-sm mb-1">Ciudad</label><input name="municipality" className="w-full border rounded px-3 py-2" /></div>
+          <div><label className="block text-sm mb-1">Provincia</label><input name="province" className="w-full border rounded px-3 py-2" /></div>
+          <div><label className="block text-sm mb-1">País</label><input name="country" defaultValue="España" className="w-full border rounded px-3 py-2" /></div>
+
+          <div><label className="block text-sm mb-1">Aforo</label><input type="number" name="capacity" className="w-full border rounded px-3 py-2" /></div>
+          <div><label className="block text-sm mb-1">Latitud (opcional)</label><input name="lat" className="w-full border rounded px-3 py-2" /></div>
+          <div><label className="block text-sm mb-1">Longitud (opcional)</label><input name="lng" className="w-full border rounded px-3 py-2" /></div>
+
+          <div className="md:col-span-3">
+            <button className="btn">Guardar actividad</button>
+          </div>
         </form>
       </ModuleCard>
     </div>
