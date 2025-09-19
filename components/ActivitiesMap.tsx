@@ -1,207 +1,145 @@
 'use client'
 
-/**
- * Mapa de actividades sin dependencias NPM.
- * Carga Leaflet desde CDN (JS + CSS) y usa window.L.
- * Exporta el tipo ActivityForMap para tipar los puntos desde las páginas.
- */
-
 import { useEffect, useRef } from 'react'
+import type L from 'leaflet'
 
-/** === Tipo que usas en las páginas === */
+// Importamos Leaflet solo en cliente
+let Leaflet: typeof import('leaflet') | null = null
+async function ensureLeaflet() {
+  if (!Leaflet) {
+    Leaflet = await import('leaflet')
+    await import('leaflet/dist/leaflet.css')
+  }
+  return Leaflet
+}
+
 export type ActivityForMap = {
   id: string
-  lat: number
-  lng: number
+  lat?: number | null
+  lng?: number | null
   date?: string | null
-  status?: 'draft' | 'hold' | 'confirmed' | string | null
+  status?: string | null // draft | hold | confirmed | ...
   type?: string | null
   href: string
 }
 
-declare global {
-  interface Window {
-    L?: any
-  }
-}
-
-const LJS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-const LCSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-
-function loadLeafletFromCDN(): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') return reject(new Error('SSR'))
-    if (window.L) return resolve(window.L)
-
-    // CSS
-    if (!document.querySelector(`link[href="${LCSS}"]`)) {
-      const link = document.createElement('link')
-      link.rel = 'stylesheet'
-      link.href = LCSS
-      link.crossOrigin = ''
-      document.head.appendChild(link)
-    }
-
-    // JS
-    const existing = document.querySelector(`script[src="${LJS}"]`) as HTMLScriptElement | null
-    if (existing && window.L) return resolve(window.L)
-
-    const script = existing ?? document.createElement('script')
-    script.src = LJS
-    script.async = true
-    script.onload = () => resolve(window.L)
-    script.onerror = (e) => reject(e)
-    if (!existing) document.body.appendChild(script)
-  })
-}
-
-function labelForType(type?: string | null) {
-  if (!type) return 'Actividad'
-  switch (type) {
-    case 'concert':
-      return 'Concierto'
-    case 'promo':
-      return 'Promo'
-    case 'festival':
-      return 'Festival'
-    default:
-      return type
-  }
-}
-
-export default function ActivitiesMap({
-  points,
-  height = 360,
-  zoom = 5,
-}: {
+type Props = {
   points: ActivityForMap[]
   height?: number
-  zoom?: number
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<any>(null)
-  const markersRef = useRef<any[]>([])
+}
+
+export default function ActivitiesMap({ points, height = 380 }: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<L.Map | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    let layer: L.LayerGroup | null = null
+    let disposed = false
 
     ;(async () => {
-      try {
-        const L = await loadLeafletFromCDN()
-        if (cancelled || !ref.current) return
+      const L = (await ensureLeaflet())!
 
-        if (!mapRef.current) {
-          mapRef.current = L.map(ref.current, {
-            zoomControl: true,
-            attributionControl: false,
-          })
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 18,
-          }).addTo(mapRef.current)
-        }
+      if (!containerRef.current || disposed) return
 
-        // Limpia y pinta
-        markersRef.current.forEach((m) => m.remove?.())
-        markersRef.current = []
+      // Crear mapa 1 sola vez
+      if (!mapRef.current) {
+        const madrid: [number, number] = [40.4168, -3.7038]
+        mapRef.current = L.map(containerRef.current, {
+          zoomControl: true,
+          attributionControl: true,
+        }).setView(madrid, 5)
 
-        const valid = (points || []).filter(
-          (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
-        )
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap',
+          maxZoom: 19,
+        }).addTo(mapRef.current)
+      }
 
-        if (valid.length) {
-          const bounds = L.latLngBounds(valid.map((p) => [p.lat, p.lng] as [number, number]))
-          mapRef.current.fitBounds(bounds.pad(0.2))
-        } else {
-          mapRef.current.setView([40.4168, -3.7038], zoom) // centro ES
-        }
+      const map = mapRef.current!
+      layer = L.layerGroup().addTo(map)
 
-        valid.forEach((p) => {
-          const color =
-            p.status === 'confirmed'
-              ? '#22c55e'
-              : p.status === 'hold' || p.status === 'draft'
-              ? '#f59e0b'
-              : '#94a3b8'
+      const has = (n: unknown): n is number =>
+        typeof n === 'number' && !Number.isNaN(n)
 
-          const dateLabel = p.date
-            ? new Date(p.date).toLocaleDateString('es-ES', {
-                day: '2-digit',
-                month: 'short',
-              }).toUpperCase()
-            : 'S/F'
+      const valid = (points || []).filter(p => has(p.lat) && has(p.lng))
 
-          const html = `
-            <a class="act-pin" href="${p.href}" target="_self" style="border-color:${color}">
-              <span class="act-pin__date">${dateLabel}</span>
-              <span class="act-pin__sep">·</span>
-              <span class="act-pin__type">${labelForType(p.type)}</span>
-            </a>
-          `
+      const bounds: [number, number][] = []
 
-          const icon = L.divIcon({
-            className: 'act-div-icon',
-            html,
-            iconSize: undefined, // deja que el contenido defina el tamaño → no se corta
-          })
+      for (const p of valid) {
+        const dateLabel = p.date
+          ? new Date(p.date).toLocaleDateString('es-ES', {
+              day: '2-digit',
+              month: 'short',
+            }).toUpperCase()
+          : ''
 
-          const m = L.marker([p.lat, p.lng], {
-            icon,
-            zIndexOffset: p.status === 'confirmed' ? 1000 : 0,
-          })
-          m.addTo(mapRef.current)
-          markersRef.current.push(m)
+        const color =
+          p.status === 'confirmed'
+            ? '#16a34a' // verde
+            : p.status === 'hold' || p.status === 'draft'
+            ? '#f59e0b' // amarillo
+            : '#94a3b8' // gris
+
+        // Pin con estilo compacto y sin deformaciones
+        const html = `
+          <div style="
+            background:#fff;
+            border:2px solid ${color};
+            border-radius:14px;
+            padding:2px 8px;
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            box-shadow:0 1px 3px rgba(0,0,0,.2);
+            white-space:nowrap;
+            font:600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
+            <span style="text-transform:uppercase">${dateLabel || ''}</span>
+            ${p.type ? `<span style="opacity:.8">${p.type}</span>` : ''}
+          </div>
+        `
+
+        const icon = (await ensureLeaflet())!.divIcon({
+          className: '',
+          html,
+          iconSize: [90, 28],
+          iconAnchor: [45, 14],
         })
-      } catch (err) {
-        console.error('Leaflet CDN load error', err)
+
+        const marker = (await ensureLeaflet())!.marker([p.lat!, p.lng!], {
+          icon,
+          title: dateLabel || '',
+        }).addTo(layer)
+
+        marker.on('click', () => {
+          if (p.href) window.location.href = p.href
+        })
+
+        bounds.push([p.lat!, p.lng!])
+      }
+
+      if (bounds.length) {
+        map.fitBounds(bounds as any, { padding: [24, 24], maxZoom: 11 })
       }
     })()
 
     return () => {
-      cancelled = true
+      disposed = true
+      if (mapRef.current && layer) {
+        mapRef.current.removeLayer(layer)
+      }
     }
-  }, [points, zoom])
+  }, [
+    // Dependencia estable: id + coordenadas + estado/fecha
+    JSON.stringify(
+      (points || []).map(p => [p.id, p.lat, p.lng, p.status, p.date, p.type]),
+    ),
+  ])
 
   return (
-    <div ref={ref} style={{ height }}>
-      <style jsx global>{`
-        .leaflet-container {
-          width: 100%;
-          height: 100%;
-          font: 12px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-          touch-action: pan-x pan-y;
-        }
-        .act-div-icon {
-          overflow: visible; /* evita el recorte del HTML interno */
-        }
-        .act-pin {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 4px 8px;
-          background: #fff;
-          border: 2px solid #e5e7eb;
-          border-radius: 9999px;
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-          text-decoration: none;
-          color: #111827;
-          white-space: nowrap;       /* no cortar texto */
-          transform: translate(-50%, -100%); /* ancla al punto geográfico */
-        }
-        .act-pin__date {
-          font-weight: 700;
-          font-size: 12px;
-          letter-spacing: 0.3px;
-        }
-        .act-pin__sep {
-          color: #94a3b8;
-        }
-        .act-pin__type {
-          font-size: 12px;
-          font-weight: 600;
-          color: #334155;
-          text-transform: capitalize;
-        }
-      `}</style>
-    </div>
+    <div
+      ref={containerRef}
+      style={{ height, width: '100%' }}
+      className="rounded border"
+    />
   )
 }
