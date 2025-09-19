@@ -14,14 +14,15 @@ export type ActivityForMap = {
 }
 
 type Props = {
-  /** Prop nuevo preferente */
+  /** Prop nueva preferente */
   points?: ActivityForMap[]
-  /** Prop legacy, mantenido para compatibilidad */
+  /** Prop legacy (compatibilidad) */
   activities?: ActivityForMap[]
+  /** Alto del mapa (px) */
   height?: number
 }
 
-/** Carga Leaflet desde CDN (JS + CSS) sólo en el cliente */
+/** Carga Leaflet desde CDN (JS + CSS) sólo en cliente */
 function loadLeafletFromCDN(): Promise<any> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined') return resolve(null)
@@ -41,9 +42,9 @@ function loadLeafletFromCDN(): Promise<any> {
     }
 
     // JS
-    const existing = document.getElementById('leaflet-js') as HTMLScriptElement | null
-    if (existing && (window as any).L) return resolve((window as any).L)
-
+    if (document.getElementById('leaflet-js') && (window as any).L) {
+      return resolve((window as any).L)
+    }
     const script = document.createElement('script')
     script.id = 'leaflet-js'
     script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
@@ -60,7 +61,7 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any | null>(null)
 
-  // Usamos points si viene, si no, activities (compatibilidad hacia atrás)
+  // Usar points si viene, si no, activities (compatibilidad)
   const list: ActivityForMap[] = (points ?? activities ?? []) as ActivityForMap[]
 
   useEffect(() => {
@@ -71,7 +72,7 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
       const L = await loadLeafletFromCDN()
       if (!L || !containerRef.current || disposed) return
 
-      // Inicializamos el mapa una sola vez
+      // Mapa una sola vez
       if (!mapRef.current) {
         const madrid: [number, number] = [40.4168, -3.7038]
         mapRef.current = L.map(containerRef.current, {
@@ -109,7 +110,7 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
             ? '#f59e0b' // amarillo
             : '#94a3b8' // gris
 
-        // Pin compacto, sin deformaciones ni recortes
+        // Etiqueta compacta, sin recortes ni deformaciones
         const html = `
           <div style="
             background:#fff;
@@ -157,7 +158,7 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
         mapRef.current.removeLayer(layer)
       }
     }
-    // Dependemos del contenido (id/coords/estado/fecha/tipo)
+    // Depende del contenido relevante
   }, [JSON.stringify(list.map(p => [p.id, p.lat, p.lng, p.status, p.date, p.type]))])
 
   return (
