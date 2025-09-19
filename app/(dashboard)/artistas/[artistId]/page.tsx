@@ -28,6 +28,8 @@ type ActivityRow = {
   id: string; type: string | null; status: string | null; date: string | null;
   municipality: string | null; province: string | null; country: string | null;
   artist_id: string | null; company_id: string | null;
+  // NUEVO: coordenadas para el mapa
+  lat?: number | null; lng?: number | null;
 }
 
 function todayISO() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10) }
@@ -120,8 +122,9 @@ async function getArtistActivities({
   past?: boolean
 }): Promise<ActivityListModel[]> {
   const s = createSupabaseServer()
+  // IMPORTANTE: añadimos lat/lng para el mapa
   let qb = s.from('activities')
-    .select('id, type, status, date, municipality, province, country, artist_id, company_id')
+    .select('id, type, status, date, municipality, province, country, artist_id, company_id, lat, lng')
     .eq('artist_id', artistId)
     .order('date', { ascending: !past })
     .order('created_at', { ascending: false })
@@ -505,11 +508,11 @@ export default async function ArtistDetail({
             <Link className="btn-secondary" href={{ pathname: `/artistas/${artist.id}`, query: { tab: parentTab, sub } }}>Terminar edición</Link>
           )}
           {artist.status === 'active'
-            ? <form action={archiveArtist}><button className="btn-secondary">Archivar</button></form>
+            ? <form action={archiveArtist} method="post"><button className="btn-secondary">Archivar</button></form>
             : (
               <>
-                <form action={recoverArtist}><button className="btn-secondary">Recuperar</button></form>
-                <form action={deleteArtist} className="flex gap-2">
+                <form action={recoverArtist} method="post"><button className="btn-secondary">Recuperar</button></form>
+                <form action={deleteArtist} method="post" className="flex gap-2">
                   <input name="confirm" placeholder="Escribe ELIMINAR" className="border rounded px-2 py-1" />
                   <button className="btn">Eliminar</button>
                 </form>
@@ -572,7 +575,7 @@ export default async function ArtistDetail({
                   </div>
                 </div>
               ) : (
-                <form action={updateBasic} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form action={updateBasic} method="post" className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm mb-1">Fotografía</label>
                     <input type="file" name="avatar" accept="image/*" />
@@ -602,7 +605,7 @@ export default async function ArtistDetail({
             <ModuleCard title="Datos personales" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
               <div className="space-y-4">
                 {isEdit && (
-                  <form action={addPerson} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <form action={addPerson} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm mb-1">Rol</label>
                       <select name="role" className="w-full border rounded px-3 py-2" defaultValue={artist.is_group ? 'member' : 'holder'}>
@@ -627,7 +630,7 @@ export default async function ArtistDetail({
                         <div className="text-xs text-gray-600">{p.role} · {p.dni || ''}</div>
                       </div>
                       {isEdit && (
-                        <form action={delPerson}>
+                        <form action={delPerson} method="post">
                           <input type="hidden" name="person_id" value={p.id} />
                           <button className="btn-secondary">Eliminar</button>
                         </form>
@@ -644,7 +647,7 @@ export default async function ArtistDetail({
           {sub === 'contratos' && (
             <ModuleCard title="Contratos" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
               {isEdit && (
-                <form action={addContract} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form action={addContract} method="post" className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div><label className="block text-sm mb-1">Nombre *</label><input name="name" required className="w-full border rounded px-3 py-2" /></div>
                   <div><label className="block text-sm mb-1">Firma *</label><input type="date" name="signed_at" required className="w-full border rounded px-3 py-2" /></div>
                   <div><label className="block text-sm mb-1">Vencimiento</label><input type="date" name="expires_at" className="w-full border rounded px-3 py-2" /></div>
@@ -677,7 +680,9 @@ export default async function ArtistDetail({
             <>
               <ModuleCard title="Condiciones económicas" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
                 {isEdit && (
-                  <IncomeConditionForm incomeTypes={incomeTypes} artistContractType={artist.artist_contract_type as 'booking'|'general'} actionAdd={addConfig} />
+                  <form action={addConfig} method="post">
+                    <IncomeConditionForm incomeTypes={incomeTypes} artistContractType={artist.artist_contract_type as 'booking'|'general'} actionAdd={addConfig} />
+                  </form>
                 )}
                 <div className="divide-y divide-gray-200 mt-6">
                   {configs.map(c => (
@@ -697,7 +702,7 @@ export default async function ArtistDetail({
               {artist.is_group && (
                 <ModuleCard title="Reparto Artista (suma 100%)" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
                   {isEdit ? configs.map(cfg => (
-                    <form key={cfg.id} action={addShare} className="border border-gray-200 rounded p-3 mb-4">
+                    <form key={cfg.id} action={addShare} method="post" className="border border-gray-200 rounded p-3 mb-4">
                       <input type="hidden" name="income_type_id" value={cfg.income_type_id} />
                       <div className="font-medium mb-2">{incomeTypeNameFromRow(cfg)}</div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -718,7 +723,7 @@ export default async function ArtistDetail({
 
               <ModuleCard title="Mínimos exentos" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
                 {isEdit && (
-                  <form action={addMinRule} className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                  <form action={addMinRule} method="post" className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-sm mb-1">Tipo ingreso</label>
                       <select name="income_type_id" className="w-full border rounded px-2 py-1">
@@ -763,7 +768,7 @@ export default async function ArtistDetail({
 
               <ModuleCard title="Adelantos" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
                 {isEdit && (
-                  <form action={addAdvance} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <form action={addAdvance} method="post" className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-sm mb-1">Tipo ingreso</label>
                       <select name="income_type_id" className="w-full border rounded px-2 py-1">
@@ -790,7 +795,7 @@ export default async function ArtistDetail({
               <ModuleCard title="Terceros vinculados" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
                 <div className="space-y-6">
                   {isEdit && (
-                    <form action={linkThird} className="border border-gray-200 rounded p-3">
+                    <form action={linkThird} method="post" className="border border-gray-200 rounded p-3">
                       <div className="font-medium mb-2">Añadir tercero</div>
                       <CounterpartyPicker />
                       <div className="mt-3"><button className="btn">Vincular</button></div>
@@ -813,13 +818,13 @@ export default async function ArtistDetail({
                               </div>
                             </div>
                             {isEdit && lnk.status === 'linked' && (
-                              <form action={unlinkThird}><input type="hidden" name="link_id" value={lnk.id} /><button className="btn-secondary">Desvincular</button></form>
+                              <form action={unlinkThird} method="post"><input type="hidden" name="link_id" value={lnk.id} /><button className="btn-secondary">Desvincular</button></form>
                             )}
                           </div>
                           <div className="mt-3 border rounded p-3">
                             <div className="font-medium mb-2">Condiciones (tercero)</div>
                             {isEdit && (
-                              <form action={addThirdConfig} className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                              <form action={addThirdConfig} method="post" className="grid grid-cols-1 md:grid-cols-4 gap-2">
                                 <input type="hidden" name="link_id" value={lnk.id} />
                                 <select name="income_type_id" className="border rounded px-2 py-1">
                                   {incomeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -850,7 +855,7 @@ export default async function ArtistDetail({
           {sub === 'fiscales' && (
             <ModuleCard title="Datos fiscales" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
               {isEdit && (
-                <form action={saveFiscal} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <form action={saveFiscal} method="post" className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div><label className="block text-sm mb-1">Factura como</label>
                     <select name="invoice_as" className="w-full border rounded px-2 py-1">
                       <option value="person">Particular</option><option value="company">Empresa</option>
@@ -892,29 +897,16 @@ async function ArtistActivitiesBlock({ artistId, searchParams }: { artistId: str
   const to = searchParams.to
   const [items, types] = await Promise.all([getArtistActivities({ artistId, q, type, from, to, past }), getActivityTypes()])
 
-  // Construcción del mapa: sólo empujamos puntos con lat/lng numéricos
-  const mapData: ActivityForMap[] = (items || []).reduce((acc: ActivityForMap[], a: any) => {
-    const latCandidate =
-      a.lat ?? a.latitude ?? a.venue_lat ??
-      (Array.isArray(a.venues) ? a.venues[0]?.lat : a.venues?.lat)
-    const lngCandidate =
-      a.lng ?? a.longitude ?? a.venue_lng ??
-      (Array.isArray(a.venues) ? a.venues[0]?.lng : a.venues?.lng)
-
-    if (typeof latCandidate === 'number' && !Number.isNaN(latCandidate) &&
-        typeof lngCandidate === 'number' && !Number.isNaN(lngCandidate)) {
-      acc.push({
-        id: a.id,
-        lat: latCandidate,
-        lng: lngCandidate,
-        date: a.date ?? undefined,
-        status: a.status ?? undefined,
-        type: a.type ?? undefined,
-        href: `/actividades/actividad/${a.id}`,
-      })
-    }
-    return acc
-  }, [])
+  // Datos para el mapa
+  const mapData: ActivityForMap[] = (items || []).map((a: any) => ({
+    id: a.id,
+    lat: typeof a.lat === 'number' ? a.lat : undefined,
+    lng: typeof a.lng === 'number' ? a.lng : undefined,
+    date: a.date ?? undefined,
+    status: a.status ?? undefined,
+    type: a.type ?? undefined,
+    href: `/actividades/actividad/${a.id}`,
+  }))
 
   return (
     <ModuleCard
