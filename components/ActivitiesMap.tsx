@@ -1,18 +1,8 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import type L from 'leaflet'
 
-// Importamos Leaflet solo en cliente
-let Leaflet: typeof import('leaflet') | null = null
-async function ensureLeaflet() {
-  if (!Leaflet) {
-    Leaflet = await import('leaflet')
-    await import('leaflet/dist/leaflet.css')
-  }
-  return Leaflet
-}
-
+/** Modelo de punto en el mapa */
 export type ActivityForMap = {
   id: string
   lat?: number | null
@@ -24,24 +14,64 @@ export type ActivityForMap = {
 }
 
 type Props = {
-  points: ActivityForMap[]
+  /** Prop nuevo preferente */
+  points?: ActivityForMap[]
+  /** Prop legacy, mantenido para compatibilidad */
+  activities?: ActivityForMap[]
   height?: number
 }
 
-export default function ActivitiesMap({ points, height = 380 }: Props) {
+/** Carga Leaflet desde CDN (JS + CSS) sólo en el cliente */
+function loadLeafletFromCDN(): Promise<any> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') return resolve(null)
+    const w = window as any
+    if (w.L) return resolve(w.L)
+
+    // CSS
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link')
+      link.id = 'leaflet-css'
+      link.rel = 'stylesheet'
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+      link.integrity =
+        'sha256-o9N1j7kGIC3G1n9G8ei2t7Ff5Q8hCqZ0Z1Z8aQ2v3yQ='
+      link.crossOrigin = ''
+      document.head.appendChild(link)
+    }
+
+    // JS
+    const existing = document.getElementById('leaflet-js') as HTMLScriptElement | null
+    if (existing && (window as any).L) return resolve((window as any).L)
+
+    const script = document.createElement('script')
+    script.id = 'leaflet-js'
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+    script.integrity =
+      'sha256-o9N1j7kGIC3G1n9G8ei2t7Ff5Q8hCqZ0Z1Z8aQ2v3yQ='
+    script.crossOrigin = ''
+    script.async = true
+    script.onload = () => resolve((window as any).L)
+    document.body.appendChild(script)
+  })
+}
+
+export default function ActivitiesMap({ points, activities, height = 380 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const mapRef = useRef<L.Map | null>(null)
+  const mapRef = useRef<any | null>(null)
+
+  // Usamos points si viene, si no, activities (compatibilidad hacia atrás)
+  const list: ActivityForMap[] = (points ?? activities ?? []) as ActivityForMap[]
 
   useEffect(() => {
-    let layer: L.LayerGroup | null = null
+    let layer: any | null = null
     let disposed = false
 
     ;(async () => {
-      const L = (await ensureLeaflet())!
+      const L = await loadLeafletFromCDN()
+      if (!L || !containerRef.current || disposed) return
 
-      if (!containerRef.current || disposed) return
-
-      // Crear mapa 1 sola vez
+      // Inicializamos el mapa una sola vez
       if (!mapRef.current) {
         const madrid: [number, number] = [40.4168, -3.7038]
         mapRef.current = L.map(containerRef.current, {
@@ -58,11 +88,10 @@ export default function ActivitiesMap({ points, height = 380 }: Props) {
       const map = mapRef.current!
       layer = L.layerGroup().addTo(map)
 
-      const has = (n: unknown): n is number =>
+      const isNum = (n: unknown): n is number =>
         typeof n === 'number' && !Number.isNaN(n)
 
-      const valid = (points || []).filter(p => has(p.lat) && has(p.lng))
-
+      const valid = (list || []).filter(p => isNum(p.lat) && isNum(p.lng))
       const bounds: [number, number][] = []
 
       for (const p of valid) {
@@ -80,7 +109,7 @@ export default function ActivitiesMap({ points, height = 380 }: Props) {
             ? '#f59e0b' // amarillo
             : '#94a3b8' // gris
 
-        // Pin con estilo compacto y sin deformaciones
+        // Pin compacto, sin deformaciones ni recortes
         const html = `
           <div style="
             background:#fff;
@@ -98,14 +127,14 @@ export default function ActivitiesMap({ points, height = 380 }: Props) {
           </div>
         `
 
-        const icon = (await ensureLeaflet())!.divIcon({
+        const icon = L.divIcon({
           className: '',
           html,
-          iconSize: [90, 28],
+          iconSize: [Math.max(90, (dateLabel?.length ?? 0) * 9 + (p.type ? 70 : 30)), 28],
           iconAnchor: [45, 14],
         })
 
-        const marker = (await ensureLeaflet())!.marker([p.lat!, p.lng!], {
+        const marker = L.marker([p.lat!, p.lng!], {
           icon,
           title: dateLabel || '',
         }).addTo(layer)
@@ -128,12 +157,8 @@ export default function ActivitiesMap({ points, height = 380 }: Props) {
         mapRef.current.removeLayer(layer)
       }
     }
-  }, [
-    // Dependencia estable: id + coordenadas + estado/fecha
-    JSON.stringify(
-      (points || []).map(p => [p.id, p.lat, p.lng, p.status, p.date, p.type]),
-    ),
-  ])
+    // Dependemos del contenido (id/coords/estado/fecha/tipo)
+  }, [JSON.stringify(list.map(p => [p.id, p.lat, p.lng, p.status, p.date, p.type]))])
 
   return (
     <div
