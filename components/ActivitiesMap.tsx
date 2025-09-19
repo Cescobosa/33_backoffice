@@ -2,27 +2,30 @@
 
 import { useEffect, useRef } from 'react'
 
-/** Modelo de punto en el mapa */
 export type ActivityForMap = {
   id: string
   lat?: number | null
   lng?: number | null
   date?: string | null
-  status?: string | null // draft | hold | confirmed | ...
+  status?: string | null // draft | hold | confirmed…
   type?: string | null
   href: string
+  // Aceptamos campos “legacy” por compatibilidad:
+  latitude?: number | null
+  longitude?: number | null
+  venue_lat?: number | null
+  venue_lng?: number | null
+  venue?: { lat?: number | null; lng?: number | null } | null
+  venues?: { lat?: number | null; lng?: number | null }[] | { lat?: number | null; lng?: number | null } | null
 }
 
 type Props = {
-  /** Prop nueva preferente */
   points?: ActivityForMap[]
-  /** Prop legacy (compatibilidad) */
-  activities?: ActivityForMap[]
-  /** Alto del mapa (px) */
+  activities?: ActivityForMap[] // compatibilidad
   height?: number
 }
 
-/** Carga Leaflet desde CDN (JS + CSS) sólo en cliente */
+/** Carga Leaflet (CSS + JS) desde CDN sólo en cliente */
 function loadLeafletFromCDN(): Promise<any> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined') return resolve(null)
@@ -35,8 +38,6 @@ function loadLeafletFromCDN(): Promise<any> {
       link.id = 'leaflet-css'
       link.rel = 'stylesheet'
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-      link.integrity =
-        'sha256-o9N1j7kGIC3G1n9G8ei2t7Ff5Q8hCqZ0Z1Z8aQ2v3yQ='
       link.crossOrigin = ''
       document.head.appendChild(link)
     }
@@ -48,8 +49,6 @@ function loadLeafletFromCDN(): Promise<any> {
     const script = document.createElement('script')
     script.id = 'leaflet-js'
     script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-    script.integrity =
-      'sha256-o9N1j7kGIC3G1n9G8ei2t7Ff5Q8hCqZ0Z1Z8aQ2v3yQ='
     script.crossOrigin = ''
     script.async = true
     script.onload = () => resolve((window as any).L)
@@ -61,8 +60,18 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any | null>(null)
 
-  // Usar points si viene, si no, activities (compatibilidad)
+  // Compatibilidad: preferimos points, si no, activities.
   const list: ActivityForMap[] = (points ?? activities ?? []) as ActivityForMap[]
+
+  // Normalizador de coordenadas — acepta múltiples “fuentes”
+  const getLatLng = (p: any): { lat?: number; lng?: number } => {
+    const v0 = Array.isArray(p?.venues) ? p.venues[0] : p?.venues
+    const candidatesLat = [p.lat, p.latitude, p.venue_lat, p?.venue?.lat, v0?.lat]
+    const candidatesLng = [p.lng, p.longitude, p.venue_lng, p?.venue?.lng, v0?.lng]
+    const lat = candidatesLat.find((x) => typeof x === 'number' && !Number.isNaN(x))
+    const lng = candidatesLng.find((x) => typeof x === 'number' && !Number.isNaN(x))
+    return { lat, lng }
+  }
 
   useEffect(() => {
     let layer: any | null = null
@@ -72,7 +81,6 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
       const L = await loadLeafletFromCDN()
       if (!L || !containerRef.current || disposed) return
 
-      // Mapa una sola vez
       if (!mapRef.current) {
         const madrid: [number, number] = [40.4168, -3.7038]
         mapRef.current = L.map(containerRef.current, {
@@ -89,18 +97,13 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
       const map = mapRef.current!
       layer = L.layerGroup().addTo(map)
 
-      const isNum = (n: unknown): n is number =>
-        typeof n === 'number' && !Number.isNaN(n)
-
-      const valid = (list || []).filter(p => isNum(p.lat) && isNum(p.lng))
       const bounds: [number, number][] = []
+      for (const p of list || []) {
+        const { lat, lng } = getLatLng(p)
+        if (typeof lat !== 'number' || typeof lng !== 'number') continue
 
-      for (const p of valid) {
         const dateLabel = p.date
-          ? new Date(p.date).toLocaleDateString('es-ES', {
-              day: '2-digit',
-              month: 'short',
-            }).toUpperCase()
+          ? new Date(p.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).toUpperCase()
           : ''
 
         const color =
@@ -110,7 +113,6 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
             ? '#f59e0b' // amarillo
             : '#94a3b8' // gris
 
-        // Etiqueta compacta, sin recortes ni deformaciones
         const html = `
           <div style="
             background:#fff;
@@ -123,49 +125,25 @@ export default function ActivitiesMap({ points, activities, height = 380 }: Prop
             box-shadow:0 1px 3px rgba(0,0,0,.2);
             white-space:nowrap;
             font:600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
-            <span style="text-transform:uppercase">${dateLabel || ''}</span>
+            ${dateLabel ? `<span style="text-transform:uppercase">${dateLabel}</span>` : ''}
             ${p.type ? `<span style="opacity:.8">${p.type}</span>` : ''}
           </div>
         `
-
-        const icon = L.divIcon({
-          className: '',
-          html,
-          iconSize: [Math.max(90, (dateLabel?.length ?? 0) * 9 + (p.type ? 70 : 30)), 28],
-          iconAnchor: [45, 14],
-        })
-
-        const marker = L.marker([p.lat!, p.lng!], {
-          icon,
-          title: dateLabel || '',
-        }).addTo(layer)
-
-        marker.on('click', () => {
-          if (p.href) window.location.href = p.href
-        })
-
-        bounds.push([p.lat!, p.lng!])
+        const icon = L.divIcon({ className: '', html, iconAnchor: [45, 14] })
+        const marker = L.marker([lat, lng], { icon }).addTo(layer)
+        marker.on('click', () => { if (p.href) window.location.href = p.href })
+        bounds.push([lat, lng])
       }
 
-      if (bounds.length) {
-        map.fitBounds(bounds as any, { padding: [24, 24], maxZoom: 11 })
-      }
+      if (bounds.length) map.fitBounds(bounds as any, { padding: [24, 24], maxZoom: 11 })
     })()
 
     return () => {
       disposed = true
-      if (mapRef.current && layer) {
-        mapRef.current.removeLayer(layer)
-      }
+      if (mapRef.current && layer) mapRef.current.removeLayer(layer)
     }
-    // Depende del contenido relevante
-  }, [JSON.stringify(list.map(p => [p.id, p.lat, p.lng, p.status, p.date, p.type]))])
+    // Re-render si cambian los puntos de forma relevante
+  }, [JSON.stringify((list || []).map(p => [p.id, p.date, p.status, p.type, p.lat, p.lng, p.latitude, p.longitude, p.venue_lat, p.venue_lng]))])
 
-  return (
-    <div
-      ref={containerRef}
-      style={{ height, width: '100%' }}
-      className="rounded border"
-    />
-  )
+  return <div ref={containerRef} style={{ height, width: '100%' }} className="rounded border" />
 }
