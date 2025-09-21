@@ -1,5 +1,4 @@
 'use client'
-
 import { useEffect, useMemo, useState } from 'react'
 
 type Row = { id: string; label: string; sub?: string; logo_url?: string; kind: 'counterparty'|'company' }
@@ -10,32 +9,30 @@ export default function CounterpartyPicker({ includeCompanies = false }: { inclu
   const [items, setItems] = useState<Row[]>([])
   const [selected, setSelected] = useState<Row | null>(null)
 
-  // Carga inicial (lista grande cacheada en cliente para filtro rápido)
+  // carga masiva y filtrado en cliente
   useEffect(() => {
     let alive = true
     ;(async () => {
-      try {
-        const res = await fetch('/api/_pickers/counterparties?q=' + encodeURIComponent('') + (includeCompanies ? '&companies=1' : ''))
-        const json = await res.json()
-        if (alive) setItems(json as Row[])
-      } catch { /* noop */ }
+      const res = await fetch(`/api/search/counterparties?bulk=1&companies=${includeCompanies ? '1' : '0'}`, { cache: 'no-store' })
+      const data = await res.json()
+      if (alive) setItems(Array.isArray(data) ? data : [])
     })()
     return () => { alive = false }
   }, [includeCompanies])
 
   const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase()
-    if (!term) return items.slice(0, 50)
-    return items.filter((i) =>
-      i.label.toLowerCase().includes(term) || (i.sub || '').toLowerCase().includes(term)
-    ).slice(0, 50)
-  }, [items, q])
+    const qq = q.trim().toLowerCase()
+    if (!qq) return items
+    return items.filter(r =>
+      r.label.toLowerCase().includes(qq) || (r.sub || '').toLowerCase().includes(qq)
+    )
+  }, [q, items])
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-4">
-        <label className="text-sm"><input type="radio" name="mode" value="existing" checked={mode==='existing'} onChange={()=>setMode('existing')} /> Elegir existente</label>
-        <label className="text-sm"><input type="radio" name="mode" value="create" checked={mode==='create'} onChange={()=>setMode('create')} /> Crear nuevo</label>
+        <label className="text-sm"><input type="radio" name="mode" defaultChecked onChange={()=>setMode('existing')} /> Elegir existente</label>
+        <label className="text-sm"><input type="radio" name="mode" onChange={()=>setMode('create')} /> Crear nuevo</label>
       </div>
 
       {mode === 'existing' ? (
@@ -44,55 +41,46 @@ export default function CounterpartyPicker({ includeCompanies = false }: { inclu
           <input type="hidden" name="selected_company_id" value={selected?.kind === 'company' ? selected.id : ''} />
 
           <div className="relative">
-            <input
-              placeholder="Busca por nombre, nick o CIF"
-              className="w-full border rounded px-3 py-2"
-              value={q} onChange={(e) => setQ(e.target.value)}
-            />
-            <div className="absolute z-10 bg-white border rounded mt-1 w-full max-h-64 overflow-auto">
-              {filtered.map((r) => (
-                <button
-                  key={`${r.kind}-${r.id}`}
-                  type="button"
-                  onClick={() => setSelected(r)}
-                  className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2 ${selected?.id === r.id && selected.kind === r.kind ? 'bg-gray-50' : ''}`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={r.logo_url || '/avatar.png'} alt="" className="h-6 w-6 object-contain rounded border" />
-                  <div>
-                    <div className="text-sm font-medium">{r.label}</div>
-                    <div className="text-xs text-gray-600">{r.sub}</div>
+            <input value={q} onChange={e=>setQ(e.target.value)} className="w-full border rounded px-3 py-2" placeholder="Buscar…"/>
+            <div className="max-h-56 overflow-auto mt-2 border rounded divide-y">
+              {filtered.map(r => (
+                <button type="button" key={r.kind+':'+r.id} onClick={()=>setSelected(r)}
+                  className={`w-full text-left px-3 py-2 hover:bg-gray-50 ${selected?.id===r.id?'bg-gray-50':''}`}>
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={r.logo_url || '/avatar.png'} className="w-6 h-6 rounded-full border object-cover bg-white" alt=""/>
+                    <div className="font-medium">{r.label}</div>
+                    {r.sub && <div className="text-xs text-gray-500">{r.sub}</div>}
+                    <span className="text-xs text-gray-400 ml-auto">{r.kind==='company'?'Empresa del grupo':'Tercero'}</span>
                   </div>
-                  <span className="ml-auto text-[10px] px-1.5 py-0.5 border rounded">{r.kind === 'company' ? 'Empresa' : 'Tercero'}</span>
                 </button>
               ))}
-              {!filtered.length && <div className="px-3 py-2 text-sm text-gray-500">Sin resultados.</div>}
+              {!filtered.length && <div className="text-sm text-gray-500 px-3 py-2">Sin resultados</div>}
             </div>
-            {selected && (
-              <div className="text-xs text-gray-600 mt-2">
-                Seleccionado: <strong>{selected.label}</strong> ({selected.kind === 'company' ? 'Empresa' : 'Tercero'})
-              </div>
-            )}
           </div>
         </>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-sm mb-1">Tipo</label>
-            <select name="kind" className="w-full border rounded px-2 py-1">
-              <option value="person">Particular</option>
-              <option value="company">Empresa</option>
-            </select>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="flex items-center gap-2"><input type="checkbox" name="is_company" /> ¿Empresa?</label>
+            <div>
+              <div className="text-sm mb-1">Logo/Foto</div>
+              <input type="file" name="logo" accept="image/*" />
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-sm mb-1">Alias (nick)</div>
+              <input name="nick" className="w-full border rounded px-3 py-2" />
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-sm mb-1">Nombre legal</div>
+              <input name="legal_name" className="w-full border rounded px-3 py-2" required />
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-sm mb-1">DNI/CIF</div>
+              <input name="tax_id" className="w-full border rounded px-3 py-2" />
+            </div>
           </div>
-          <div className="md:col-span-2">
-            <label className="block text-sm mb-1">Nombre / Razón social</label>
-            <input name="legal_name" className="w-full border rounded px-3 py-2" />
-          </div>
-          <div className="md:col-span-3">
-            <label className="block text-sm mb-1">CIF / DNI (opcional)</label>
-            <input name="tax_id" className="w-full border rounded px-3 py-2" />
-          </div>
-        </div>
+        </>
       )}
     </div>
   )
