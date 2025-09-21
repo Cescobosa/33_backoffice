@@ -900,8 +900,8 @@ async function ArtistActivitiesBlock({ artistId, searchParams }: { artistId: str
   // Datos para el mapa
   const mapData: ActivityForMap[] = (items || []).map((a: any) => ({
     id: a.id,
-    lat: typeof a.lat === 'number' ? a.lat : undefined,
-    lng: typeof a.lng === 'number' ? a.lng : undefined,
+    lat: typeof a.lat === 'number' ? a.lat : (a.lat ? Number(a.lat) : undefined),
+    lng: typeof a.lng === 'number' ? a.lng : (a.lng ? Number(a.lng) : undefined),
     date: a.date ?? undefined,
     status: a.status ?? undefined,
     type: a.type ?? undefined,
