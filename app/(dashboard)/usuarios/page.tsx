@@ -1,47 +1,37 @@
-// app/(dashboard)/usuarios/page.tsx
 import { revalidatePath } from 'next/cache'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import UserCreate from '@/components/UserCreate'
+import SavedToast from '@/components/SavedToast'
 
 export const dynamic = 'force-dynamic'
 
-type Dept = { id: string; name: string }
-
-export default async function UsersPage() {
+export default async function UsersPage({ searchParams }: { searchParams?: { saved?: string } }) {
+  const showSaved = searchParams?.saved === '1'
   const s = createSupabaseServer()
 
-  // Departamentos para el selector
-  const { data: departments, error: deptErr } = await s
-    .from('departments')
-    .select('id, name')
-    .order('name', { ascending: true })
+  const { data: departments, error: deptErr } = await s.from('departments').select('id, name').order('name')
+  if (deptErr) throw new Error(deptErr.message)
 
-  if (deptErr) {
-    throw new Error(deptErr.message)
-  }
+  const { data: users } = await s
+    .from('profiles')
+    .select('id, full_name, nick, email, is_admin, departments:department_id(name)')
+    .order('full_name', { ascending: true })
 
-  // ===== Server Action =====
   async function createUser(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-
-    const email = String(formData.get('email') || '').trim()
-    const password = String(formData.get('password') || '')
     const full_name = String(formData.get('full_name') || '').trim()
     const nick = String(formData.get('nick') || '').trim() || null
+    const email = String(formData.get('email') || '').trim().toLowerCase()
     const department_id = String(formData.get('department_id') || '') || null
     const is_admin = formData.get('is_admin') === 'on'
 
-    if (!email) throw new Error('Email obligatorio')
+    if (!full_name || !email) throw new Error('Nombre y email requeridos')
 
-    // Crea el usuario en Auth (admin) y marca email como verificado
+    // Crea usuario en Auth
     const { data: created, error: authErr } = await s.auth.admin.createUser({
-      email,
-      password: password || crypto.randomUUID(), // si no mandan password, generamos una
-      email_confirm: true,
+      email, email_confirm: true
     })
     if (authErr) throw new Error(authErr.message)
-
     const authId = created.user?.id
     if (!authId) throw new Error('No se pudo crear el usuario en Auth')
 
@@ -49,27 +39,78 @@ export default async function UsersPage() {
     const org = await s.from('organizations').select('id').limit(1).single()
     if (org.error) throw new Error(org.error.message)
 
-    // Inserta profile
+    // Inserta perfil
     const { error: profErr } = await s.from('profiles').insert({
       id: authId,
       organization_id: org.data.id,
       full_name,
       nick,
       email,
-      department_id: department_id || null,
-      is_admin,
+      department_id,
+      is_admin
     })
     if (profErr) throw new Error(profErr.message)
 
     revalidatePath('/usuarios')
+    // redirección con query para mostrar toast
+    return { redirect: '/usuarios?saved=1' }
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Usuarios</h1>
+      <SavedToast show={showSaved} />
 
-      {/* Botón + formulario (el despliegue lo maneja el componente cliente) */}
-      <UserCreate actionCreate={createUser} departments={(departments as Dept[]) || []} />
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Usuarios</h1>
+        <details className="relative">
+          <summary className="btn">+ Añadir usuario</summary>
+          <div className="absolute right-0 mt-2 w-[28rem] border rounded bg-white shadow p-4 z-10">
+            <form action={createUser} className="space-y-3">
+              <div>
+                <div className="text-sm mb-1">Nombre completo</div>
+                <input name="full_name" className="w-full border rounded px-3 py-2" required />
+              </div>
+              <div>
+                <div className="text-sm mb-1">Nick</div>
+                <input name="nick" className="w-full border rounded px-3 py-2" />
+              </div>
+              <div>
+                <div className="text-sm mb-1">Email</div>
+                <input type="email" name="email" className="w-full border rounded px-3 py-2" required />
+              </div>
+              <div>
+                <div className="text-sm mb-1">Departamento</div>
+                <select name="department_id" className="w-full border rounded px-3 py-2">
+                  <option value="">(sin departamento)</option>
+                  {(departments || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_admin" /> Administrador
+              </label>
+              <div className="flex gap-2">
+                <button className="btn">Crear</button>
+                <button type="button" className="btn-secondary" onClick={() => (window.location.href='/usuarios')}>Cancelar</button>
+              </div>
+            </form>
+          </div>
+        </details>
+      </div>
+
+      <div className="border rounded divide-y">
+        {(users || []).map((u: any) => (
+          <div key={u.id} className="p-3 flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={u.avatar_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
+            <div className="grow">
+              <div className="font-medium">{u.nick || u.full_name}</div>
+              <div className="text-sm text-gray-600">{u.email} · {u.departments?.name || 'Sin depto.'}</div>
+            </div>
+            {u.is_admin && <span className="badge badge-green">Admin</span>}
+          </div>
+        ))}
+        {!users?.length && <div className="p-3 text-sm text-gray-500">Aún no hay usuarios.</div>}
+      </div>
     </div>
   )
 }
