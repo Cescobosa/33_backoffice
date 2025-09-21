@@ -49,10 +49,12 @@ export default async function CompanyPage({
   async function deleteCompany() {
     'use server'
     const s = createSupabaseServer()
-    const companyId = String(params.id)
-  
-    // (Opcional pero recomendable) Comprueba que existe
-    const existing = await s.from('group_companies')
+    // 🔧 ARREGLO: usar params.companyId (no params.id)
+    const companyId = String(params.companyId)
+
+    // (Opcional) comprobar existencia
+    const existing = await s
+      .from('group_companies')
       .select('id')
       .eq('id', companyId)
       .maybeSingle()
@@ -60,25 +62,24 @@ export default async function CompanyPage({
       throw new Error(existing.error.message)
     }
     if (!existing.data) {
-      // Si no existe, navega fuera o lanza 404
       redirect('/empresas')
       return
     }
-  
-    // 1) Desvincula actividades para no romper la FK
+
+    // Desvincular actividades para no romper FK
     const up = await s
       .from('activities')
       .update({ company_id: null })
       .eq('company_id', companyId)
     if (up.error) throw new Error(up.error.message)
-  
-    // 2) Borra la empresa
+
+    // Borrar empresa
     const del = await s
       .from('group_companies')
       .delete()
       .eq('id', companyId)
     if (del.error) throw new Error(del.error.message)
-  
+
     revalidatePath('/empresas')
     redirect('/empresas')
   }
