@@ -35,8 +35,7 @@ async function getCompanyActivities(companyId: string) {
 }
 
 export default async function CompanyPage({
-  params,
-  searchParams,
+  params, searchParams,
 }: {
   params: { companyId: string }
   searchParams: { saved?: string }
@@ -49,35 +48,19 @@ export default async function CompanyPage({
   async function deleteCompany() {
     'use server'
     const s = createSupabaseServer()
-    // 🔧 ARREGLO: usar params.companyId (no params.id)
     const companyId = String(params.companyId)
 
-    // (Opcional) comprobar existencia
-    const existing = await s
-      .from('group_companies')
-      .select('id')
-      .eq('id', companyId)
-      .maybeSingle()
-    if (existing.error && existing.error.code !== 'PGRST116') {
-      throw new Error(existing.error.message)
-    }
-    if (!existing.data) {
-      redirect('/empresas')
-      return
-    }
+    // ¿Existe?
+    const existing = await s.from('group_companies').select('id').eq('id', companyId).maybeSingle()
+    if (existing.error && existing.error.code !== 'PGRST116') throw new Error(existing.error.message)
+    if (!existing.data) { redirect('/empresas'); return }
 
-    // Desvincular actividades para no romper FK
-    const up = await s
-      .from('activities')
-      .update({ company_id: null })
-      .eq('company_id', companyId)
+    // Desvincula actividades
+    const up = await s.from('activities').update({ company_id: null }).eq('company_id', companyId)
     if (up.error) throw new Error(up.error.message)
 
-    // Borrar empresa
-    const del = await s
-      .from('group_companies')
-      .delete()
-      .eq('id', companyId)
+    // Borra
+    const del = await s.from('group_companies').delete().eq('id', companyId)
     if (del.error) throw new Error(del.error.message)
 
     revalidatePath('/empresas')
@@ -88,15 +71,11 @@ export default async function CompanyPage({
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {company.logo_url && (
-            <img src={company.logo_url} className="h-10 w-auto object-contain" alt="" />
-          )}
+          {company.logo_url && <img src={company.logo_url} className="h-10 w-auto object-contain" alt="" />}
           <h1 className="text-2xl font-semibold">{company.nick || company.name}</h1>
         </div>
         <div className="flex gap-2">
-          <form action={deleteCompany}>
-            <button className="btn-secondary">Eliminar empresa</button>
-          </form>
+          <form action={deleteCompany}><button className="btn-secondary">Eliminar empresa</button></form>
           <Link href="/empresas" className="btn-secondary">Volver</Link>
         </div>
       </div>
@@ -114,15 +93,13 @@ export default async function CompanyPage({
             const art = Array.isArray(a.artists) ? a.artists[0] : (a as any).artists
             return (
               <Link
-                href={`/actividades/actividad/${a.id}`}
-                key={a.id}
+                href={`/actividades/actividad/${a.id}`} key={a.id}
                 className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded"
               >
                 <div className="flex items-center gap-3">
-                  {art?.avatar_url
-                    ? <img src={art.avatar_url} className="h-8 w-8 rounded-full object-cover border" alt="" />
-                    : <div className="h-8 w-8 rounded-full bg-gray-200" />
-                  }
+                  {art?.avatar_url ? (
+                    <img src={art.avatar_url} className="h-8 w-8 rounded-full object-cover border" alt="" />
+                  ) : <div className="h-8 w-8 rounded-full bg-gray-200" />}
                   <div>
                     <div className="font-medium">{a.type}</div>
                     <div className="text-sm text-gray-600">
