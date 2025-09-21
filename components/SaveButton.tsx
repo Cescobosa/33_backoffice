@@ -1,11 +1,11 @@
 'use client'
 import { useFormStatus } from 'react-dom'
 
-export default function SaveButton({ children = 'Guardar', className = 'btn' }: { children?: React.ReactNode, className?: string }) {
+export default function SaveButton({ label = 'Guardar' }: { label?: string }) {
   const { pending } = useFormStatus()
   return (
-    <button className={className} disabled={pending}>
-      {pending ? 'Guardando…' : children}
+    <button className="btn" disabled={pending}>
+      {pending ? 'Guardando…' : label}
     </button>
   )
 }
