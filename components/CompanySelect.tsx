@@ -1,87 +1,263 @@
 'use client'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
-export type CompanyLite = { id: string; name: string | null; nick: string | null; logo_url: string | null }
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useId,
+} from 'react'
 
+export type CompanyLite = {
+  id: string
+  name: string | null
+  nick: string | null
+  logo_url: string | null
+}
+
+type Props = {
+  /** name del input oculto que enviará el id de la empresa */
+  name?: string
+  /** listado completo de empresas */
+  companies: CompanyLite[]
+  /** id por defecto (preseleccionado) */
+  defaultValue?: string | null
+  /** callback opcional al cambiar */
+  onChangeId?: (id: string | null) => void
+  /** placeholder del buscador */
+  placeholder?: string
+  /** clase extra para el contenedor */
+  className?: string
+}
+
+/**
+ * Selector de empresas con:
+ * - búsqueda por nombre/nick
+ * - menú en posición *fixed* para que no se corte por contenedores con overflow
+ * - cierre por click fuera / scroll / resize
+ * - tipado correcto de listeners (Event, no MouseEvent)
+ */
 export default function CompanySelect({
-  name, companies, defaultValue,
-}: { name: string, companies: CompanyLite[], defaultValue?: string | null }) {
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const btnRef = useRef<HTMLButtonElement | null>(null)
-  const [portalEl, setPortalEl] = useState<HTMLElement | null>(null)
-  const [coords, setCoords] = useState<{top:number,left:number,width:number} | null>(null)
-  const [value, setValue] = useState<string | null>(defaultValue ?? null)
+  name = 'company_id',
+  companies,
+  defaultValue = null,
+  onChangeId,
+  placeholder = 'Selecciona empresa…',
+  className = '',
+}: Props) {
+  const uid = useId()
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const selected = useMemo(() => companies.find(c => c.id === value) ?? null, [companies, value])
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState<string>('')
+  const [selectedId, setSelectedId] = useState<string | null>(
+    defaultValue ?? null
+  )
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
+
+  // Establece el texto del input si viene un valor por defecto
+  useEffect(() => {
+    const pre = companies.find((c) => c.id === defaultValue)
+    if (pre) setQuery(pre.nick || pre.name || '')
+    setSelectedId(defaultValue ?? null)
+  }, [defaultValue, companies])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return q ? companies.filter(c =>
-      (c.nick || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
-    ) : companies
+    const q = (query || '').toLowerCase().trim()
+    if (!q) return companies
+    return companies.filter((c) => {
+      const s = `${c.nick ?? ''} ${c.name ?? ''}`.toLowerCase()
+      return s.includes(q)
+    })
   }, [companies, query])
 
-  useEffect(() => setPortalEl(document.body), [])
+  // Abre y recoloca el menú
+  const openMenu = () => {
+    setOpen(true)
+    if (anchorRef.current) {
+      setAnchorRect(anchorRef.current.getBoundingClientRect())
+    }
+  }
 
+  // Cierre seguro (tipado con Event, no MouseEvent)
   useEffect(() => {
-    if (!open || !btnRef.current) return
-    const r = btnRef.current.getBoundingClientRect()
-    setCoords({ top: r.bottom + window.scrollY + 6, left: r.left + window.scrollX, width: r.width })
-  }, [open])
+    if (!open) return
 
-  useEffect(() => {
-    const close = (e: MouseEvent) => { if (open) setOpen(false) }
-    window.addEventListener('scroll', close, true)
-    window.addEventListener('resize', close)
-    window.addEventListener('click', close)
+    const updateRect = () => {
+      if (anchorRef.current) {
+        setAnchorRect(anchorRef.current.getBoundingClientRect())
+      }
+    }
+
+    const handleOutside = (ev: Event) => {
+      const t = ev.target as Node | null
+      if (!t) return
+      if (
+        anchorRef.current?.contains(t) ||
+        dropdownRef.current?.contains(t)
+      ) {
+        return
+      }
+      setOpen(false)
+    }
+
+    // OJO: para scroll en cualquier contenedor usamos capture=true
+    window.addEventListener('scroll', updateRect, true)
+    window.addEventListener('resize', updateRect)
+    document.addEventListener('click', handleOutside)
+
     return () => {
-      window.removeEventListener('scroll', close, true)
-      window.removeEventListener('resize', close)
-      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', updateRect, true)
+      window.removeEventListener('resize', updateRect)
+      document.removeEventListener('click', handleOutside)
     }
   }, [open])
 
-  return (
-    <div className="relative">
-      <input type="hidden" name={name} value={value ?? ''} />
-      <button ref={btnRef} type="button" className="w-full border rounded px-3 py-2 text-left flex items-center gap-2"
-        onClick={() => setOpen(o => !o)}>
-        {selected?.logo_url && <img src={selected.logo_url} alt="" className="h-5 w-auto object-contain" />}
-        <span>{selected ? (selected.nick || selected.name) : 'Seleccionar empresa…'}</span>
-        <span className="ml-auto text-gray-400">▾</span>
-      </button>
+  const pick = (c: CompanyLite) => {
+    setSelectedId(c.id)
+    setQuery(c.nick || c.name || '')
+    setOpen(false)
+    onChangeId?.(c.id)
+  }
 
-      {open && portalEl && coords && createPortal(
+  const clear = () => {
+    setSelectedId(null)
+    setQuery('')
+    onChangeId?.(null)
+  }
+
+  // Cálculo de posición/altura del dropdown en fixed
+  const styleFixed: React.CSSProperties = (() => {
+    if (!anchorRect) return { display: 'none' }
+    const margin = 6
+    const top = Math.min(
+      anchorRect.bottom + margin,
+      window.innerHeight - 16
+    )
+    const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - anchorRect.width - 8))
+    const maxH = Math.max(
+      160,
+      Math.min(360, window.innerHeight - top - 12)
+    )
+    return {
+      position: 'fixed',
+      top,
+      left,
+      width: anchorRect.width,
+      maxHeight: maxH,
+      overflowY: 'auto',
+      zIndex: 60,
+      background: '#fff',
+      border: '1px solid rgba(0,0,0,0.08)',
+      borderRadius: 8,
+      boxShadow:
+        '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1)',
+    }
+  })()
+
+  const selected = selectedId
+    ? companies.find((c) => c.id === selectedId) || null
+    : null
+
+  return (
+    <div className={`w-full ${className}`} ref={anchorRef}>
+      {/* input visible para búsqueda */}
+      <div className="relative">
+        <input
+          type="text"
+          value={query}
+          onFocus={openMenu}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            if (!open) setOpen(true)
+          }}
+          placeholder={placeholder}
+          className="w-full border rounded px-3 py-2 pr-9"
+          aria-controls={`company-list-${uid}`}
+          aria-expanded={open}
+          autoComplete="off"
+        />
+        {/* Botón limpiar */}
+        {query && (
+          <button
+            type="button"
+            onClick={clear}
+            className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            aria-label="Limpiar"
+          >
+            ×
+          </button>
+        )}
+        {/* Indicador */}
+        <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-gray-400">
+          ▾
+        </div>
+      </div>
+
+      {/* input oculto que envía el id */}
+      <input type="hidden" name={name} value={selectedId ?? ''} />
+
+      {/* Dropdown en *fixed* para que no se corte */}
+      {open && (
         <div
-          className="z-[1000] bg-white border rounded shadow-lg"
-          style={{ position: 'absolute', top: coords.top, left: coords.left, width: coords.width, maxHeight: 320, overflow: 'auto' }}
-          onClick={e => e.stopPropagation()}
+          id={`company-list-${uid}`}
+          ref={dropdownRef}
+          role="listbox"
+          style={styleFixed}
+          className="text-sm"
         >
-          <div className="p-2 border-b">
-            <input
-              placeholder="Buscar…"
-              className="w-full border rounded px-2 py-1 text-sm"
-              value={query} onChange={e => setQuery(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <ul className="py-1">
-            {filtered.map(c => (
-              <li key={c.id}>
-                <button type="button"
-                  className="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center gap-2"
-                  onClick={() => { setValue(c.id); setOpen(false) }}>
-                  {c.logo_url && <img src={c.logo_url} className="h-5 w-auto object-contain" alt="" />}
-                  <span className="text-sm">{c.nick || c.name}</span>
-                </button>
-              </li>
-            ))}
-            {!filtered.length && <li className="px-3 py-2 text-sm text-gray-500">Sin resultados</li>}
-          </ul>
-        </div>,
-        portalEl
+          {filtered.length === 0 && (
+            <div className="px-3 py-2 text-gray-500">Sin resultados</div>
+          )}
+
+          {filtered.map((c) => {
+            const label = c.nick || c.name || '(sin nombre)'
+            const isSel = c.id === selectedId
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                onClick={() => pick(c)}
+                className={`w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 text-left ${
+                  isSel ? 'bg-gray-50' : ''
+                }`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={c.logo_url || '/avatar.png'}
+                  alt=""
+                  className="h-6 w-auto object-contain rounded border bg-white"
+                />
+                <div className="flex-1">
+                  <div className="font-medium leading-5">{label}</div>
+                  {c.name && c.nick && c.name !== c.nick && (
+                    <div className="text-xs text-gray-500 leading-4">
+                      {c.name}
+                    </div>
+                  )}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Ayuda visual de selección actual (opcional) */}
+      {selected && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-gray-600">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={selected.logo_url || '/avatar.png'}
+            alt=""
+            className="h-5 w-auto object-contain rounded border bg-white"
+          />
+          <span className="truncate">
+            Seleccionada: {selected.nick || selected.name}
+          </span>
+        </div>
       )}
     </div>
   )
