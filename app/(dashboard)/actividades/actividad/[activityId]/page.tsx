@@ -4,13 +4,13 @@ import CounterpartyPicker from '@/components/CounterpartyPicker'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
-import { notFound, redirect } from 'next/navigation'
+import { notFound } from 'next/navigation'
 
 import ActivityIncomeCreator from '@/components/ActivityIncomeCreator'
 import CompanySelect, { CompanyLite } from '@/components/CompanySelect'
 import SavedToast from '@/components/SavedToast'
-import TicketsModule from '@/components/TicketsModule'
 import TicketSalesModule from '@/components/TicketSalesModule'
+import ExpensesModule from '@/components/ExpensesModule' // Bolsa de gastos
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -43,19 +43,7 @@ export default async function ActivityDetail({
     .eq('id', params.activityId)
     .single()
 
-  if (aErr || !a) throw new Error(aErr?.message || 'Actividad no encontrada')
-
-  const { data: ticketSettings } = await s
-    .from('activity_ticket_settings')
-    .select('enabled, capacity, sgae_pct, iva_pct, announcement_tbc, announcement_at, on_sale_at, vendor_name, sales_url')
-    .eq('activity_id', a.id)
-    .maybeSingle()
-
-  const { data: ticketTypes } = await s
-    .from('activity_ticket_types')
-    .select('id, name, quantity, price_gross, invites_quota')
-    .eq('activity_id', a.id)
-    .order('created_at')  
+  if (aErr || !a) notFound()
 
   // Artista
   const { data: artist } = await s
@@ -132,9 +120,28 @@ export default async function ActivityDetail({
     .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick)')
     .eq('activity_id', a.id)
 
+  // ====== Venta de entradas ======
   const { data: setup } = await s.from('activity_ticket_setup').select('*').eq('activity_id', a.id).maybeSingle()
   const { data: typesRows } = await s.from('activity_ticket_types').select('*').eq('activity_id', a.id).order('position')
-  const { data: reportsRows } = await s.from('activity_ticket_reports').select('id, report_date, totals_sold, totals_net_revenue, created_at').eq('activity_id', a.id).order('report_date', { ascending: false })
+  const { data: reportsRows } = await s
+    .from('activity_ticket_reports')
+    .select('id, report_date, totals_sold, totals_net_revenue, created_at')
+    .eq('activity_id', a.id)
+    .order('report_date', { ascending: false })
+
+  // ====== Bolsa de gastos (listado) ======
+  const { data: expensesRows } = await s
+    .from('activity_expenses')
+    .select('id, kind, concept, amount_net, amount_gross, is_invoice, billing_status, payment_status, payment_method, payment_date, assumed_by, file_url, counterparty:counterparties(id,legal_name,nick,logo_url)')
+    .eq('activity_id', a.id)
+    .order('created_at', { ascending: false })
+
+  const groupedExpenses: Record<string, any[]> = {}
+  for (const e of (expensesRows || [])) {
+    const k = e.kind || 'other'
+    groupedExpenses[k] = groupedExpenses[k] || []
+    groupedExpenses[k].push(e)
+  }
 
   // ========= Server Actions =========
 
@@ -473,6 +480,7 @@ export default async function ActivityDetail({
     revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
+  // ====== Venta de entradas (server actions) ======
   async function saveTicketSetup(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -485,7 +493,7 @@ export default async function ActivityDetail({
     const onsale_at = String(formData.get('onsale_at') || '') || null
     const ticketing_name = String(formData.get('ticketing_name') || '') || null
     const ticketing_url = String(formData.get('ticketing_url') || '') || null
-  
+
     const existing = await s.from('activity_ticket_setup').select('activity_id').eq('activity_id', a.id).maybeSingle()
     const row = {
       has_ticket_sales, sgae_pct, vat_pct,
@@ -501,7 +509,7 @@ export default async function ActivityDetail({
     }
     revalidatePath(`/actividades/actividad/${a.id}`)
   }
-  
+
   async function addTicketType(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -510,20 +518,20 @@ export default async function ActivityDetail({
     const price_gross = Number(formData.get('price_gross') || 0)
     const invitations_qty = Number(formData.get('invitations_qty') || 0)
     if (!name) throw new Error('Nombre requerido')
-  
+
     // neto = (PVP / (1+IVA)) * (1 - SGAE)
     const setup = await s.from('activity_ticket_setup').select('sgae_pct, vat_pct').eq('activity_id', a.id).maybeSingle()
     const vat = setup.data?.vat_pct ?? 21
     const sgae = setup.data?.sgae_pct ?? 10
     const price_net = Math.max(0, (price_gross / (1 + vat/100)) * (1 - sgae/100))
-  
+
     const { error } = await s.from('activity_ticket_types').insert({
       activity_id: a.id, name, qty, price_gross, price_net, invitations_qty
     })
     if (error) throw new Error(error.message)
     revalidatePath(`/actividades/actividad/${a.id}`)
   }
-  
+
   async function delTicketType(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -533,7 +541,7 @@ export default async function ActivityDetail({
     if (error) throw new Error(error.message)
     revalidatePath(`/actividades/actividad/${a.id}`)
   }
-  
+
   async function saveTicketReport(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -543,32 +551,94 @@ export default async function ActivityDetail({
     const totals_net_revenue = Number(formData.get('totals_net_revenue') || 0)
     const note = String(formData.get('note') || '').trim() || null
 
-  // Desglose por tipo si viene
-  const { data: tts } = await s.from('activity_ticket_types').select('id, name, price_net').eq('activity_id', a.id)
-  const by: Record<string, { sold: number, net: number }> = {}
-  let soldAcc = 0
-  let netAcc = 0
-  for (const t of (tts || [])) {
-    const val = formData.get(`by_${t.id}`)
-    const num = val ? Number(val) : 0
-    if (num > 0) {
-      const net = (Number(t.price_net) || 0) * num
-      by[t.name] = { sold: num, net }
-      soldAcc += num
-      netAcc += net
+    // Desglose por tipo si viene
+    const { data: tts } = await s.from('activity_ticket_types').select('id, name, price_net').eq('activity_id', a.id)
+    const by: Record<string, { sold: number, net: number }> = {}
+    let soldAcc = 0
+    let netAcc = 0
+    for (const t of (tts || [])) {
+      const val = formData.get(`by_${t.id}`)
+      const num = val ? Number(val) : 0
+      if (num > 0) {
+        const net = (Number(t.price_net) || 0) * num
+        by[t.name] = { sold: num, net }
+        soldAcc += num
+        netAcc += net
+      }
     }
-  }
-  const finalSold = totals_sold || soldAcc
-  const finalNet = totals_net_revenue || netAcc
+    const finalSold = totals_sold || soldAcc
+    const finalNet = totals_net_revenue || netAcc
 
-  const { error } = await s.from('activity_ticket_reports').insert({
-    activity_id: a.id,
-    report_date, aggregate_only, totals_sold: finalSold, totals_net_revenue: finalNet,
-    by_type: Object.keys(by).length ? by : null, note
-  })
-  if (error) throw new Error(error.message)
-  revalidatePath(`/actividades/actividad/${a.id}`)
-}
+    const { error } = await s.from('activity_ticket_reports').insert({
+      activity_id: a.id,
+      report_date, aggregate_only, totals_sold: finalSold, totals_net_revenue: finalNet,
+      by_type: Object.keys(by).length ? by : null, note
+    })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
+  }
+
+  // === Bolsa de gastos (server actions) ===
+  async function newExpense(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const kind = String(formData.get('kind') || 'other')
+    const concept = String(formData.get('concept') || '').trim()
+    const counterparty_id = String(formData.get('counterparty_id') || '') || null
+    const is_invoice = formData.get('is_invoice') === 'on'
+    const invoice_number = String(formData.get('invoice_number') || '') || null
+    const invoice_date = String(formData.get('invoice_date') || '') || null
+    const amount_net = Number(formData.get('amount_net') || 0)
+    const amount_gross = formData.get('amount_gross') ? Number(formData.get('amount_gross')) : null
+    const vat_pct = formData.get('vat_pct') ? Number(formData.get('vat_pct')) : null
+
+    if (!concept) throw new Error('Concepto requerido')
+
+    const { error } = await s.from('activity_expenses').insert({
+      activity_id: a.id, kind, concept, counterparty_id, is_invoice, invoice_number, invoice_date,
+      amount_net, amount_gross, vat_pct
+    })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
+  }
+
+  async function markPaid(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const expense_id = String(formData.get('expense_id') || '')
+    const payment_method = String(formData.get('payment_method') || 'transfer') as any
+    const { error } = await s.from('activity_expenses').update({
+      payment_status: 'paid', payment_method, payment_date: new Date().toISOString().slice(0,10)
+    }).eq('id', expense_id).eq('activity_id', a.id)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
+  }
+
+  async function requestInvoice(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const expense_id = String(formData.get('expense_id') || '')
+    // Aquí podrías generar un token y mandar email, en esta versión sólo marcamos "requested"
+    const { error } = await s.from('activity_expenses').update({
+      payment_status: 'requested'
+    }).eq('id', expense_id).eq('activity_id', a.id)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
+  }
+
+  // =================== RENDER ===================
+  return (
+    <div className="space-y-6">
+      {/* Cabecera */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">{artist?.stage_name || 'Actividad'} · {a.type}</h1>
+          <div className="text-sm text-gray-600">
+            {a.date ? new Date(a.date).toLocaleDateString() : 'Sin fecha'} {a.time ? ('· ' + a.time) : ''}
+          </div>
+        </div>
+        <Link href="/actividades" className="btn-secondary">Volver</Link>
+      </div>
 
       {/* DATOS BÁSICOS */}
       <ModuleCard title="Datos básicos" leftActions={<span className="badge">Editar</span>}>
@@ -620,7 +690,8 @@ export default async function ActivityDetail({
           </div>
         </form>
       </ModuleCard>
-      
+
+      {/* VENTA DE ENTRADAS */}
       <ModuleCard title="Venta de entradas">
         <TicketSalesModule
           setup={setup || null}
@@ -633,7 +704,7 @@ export default async function ActivityDetail({
           capacityFromActivity={a.capacity || null}
         />
       </ModuleCard>
-      
+
       {/* Empresa del grupo con logos */}
       <ModuleCard title="Empresa del grupo">
         <form action={setCompany} className="max-w-lg">
@@ -697,8 +768,6 @@ export default async function ActivityDetail({
           {!incomes?.length && <div className="text-sm text-gray-500">Sin ingresos configurados.</div>}
         </div>
       </ModuleCard>
-
-      <SavedToast show={searchParams?.saved === '1'} />
 
       {/* AGENTE DE ZONA */}
       <ModuleCard title="Agente de zona" leftActions={<span className="badge">Editar</span>}>
@@ -1038,6 +1107,18 @@ export default async function ActivityDetail({
           {!partners?.length && <div className="text-sm text-gray-500">Sin socios.</div>}
         </div>
       </ModuleCard>
+
+      {/* BOLSA DE GASTOS */}
+      <ModuleCard title="Bolsa">
+        <ExpensesModule
+          grouped={groupedExpenses}
+          actionNewExpense={newExpense}
+          actionMarkPaid={markPaid}
+          actionRequestInvoice={requestInvoice}
+        />
+      </ModuleCard>
+
+      <SavedToast show={searchParams?.saved === '1'} />
     </div>
   )
 }
