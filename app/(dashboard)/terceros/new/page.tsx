@@ -15,32 +15,38 @@ export default function NewThirdPage() {
     let logo_url: string | null = null
     const logo = formData.get('logo') as File | null
     if (logo && logo.size > 0) {
-      await ensurePublicBucket('avatars')
-      const path = `counterparties/${crypto.randomUUID()}`
-      const up = await s.storage.from('avatars').upload(path, logo, { cacheControl: '3600', upsert: false, contentType: logo.type || 'image/*' })
-      if (up.error) throw new Error(up.error.message)
-      const pub = s.storage.from('avatars').getPublicUrl(up.data.path)
-      logo_url = pub.data.publicUrl
+      await ensurePublicBucket('files')
+      const ext = (logo.name.split('.').pop() || 'png').toLowerCase()
+      const path = `counterparties/${crypto.randomUUID()}.${ext}`
+      const { error: upErr } = await s.storage.from('files').upload(path, logo, { upsert: true })
+      if (upErr) throw new Error(upErr.message)
+      const { data: pub } = s.storage.from('files').getPublicUrl(path)
+      logo_url = pub?.publicUrl || null
     }
 
-    // Intentamos insertar; si hay duplicado, recuperamos y marcamos flag
-    const { data, error } = await s.from('counterparties')
-      .insert({ organization_id: (await s.from('organizations').select('id').limit(1).single()).data!.id,
-                as_third_party: true, as_provider: false, is_company, nick, legal_name, tax_id, logo_url })
-      .select('id').single()
+    // Usamos la primera organización existente
+    const org = await s.from('organizations').select('id').limit(1).single()
+    if (org.error) throw new Error(org.error.message)
 
-    let id = data?.id
-    if (error) {
-      // Duplicado → buscar por tax_id o legal_name + is_company y marcar como tercero
+    const ins = await s.from('counterparties')
+      .insert({
+        organization_id: org.data.id,
+        as_third_party: true, as_provider: true,
+        is_company, nick, legal_name, tax_id, logo_url,
+        status: 'active'
+      }).select('id').single()
+
+    let id = ins.data?.id
+    if (ins.error) {
+      // Si existe por unique_key/tax_id -> lo marcamos como tercero/proveedor
       const guess = await s.from('counterparties')
-        .select('id').or(tax_id
-          ? `tax_id.eq.${tax_id}`
-          : `and(legal_name.ilike.${legal_name},is_company.eq.${is_company})`).maybeSingle()
+        .select('id').or(tax_id ? `tax_id.eq.${tax_id}` : `and(legal_name.ilike.${legal_name},is_company.eq.${is_company})`)
+        .maybeSingle()
       if (guess.data?.id) {
         id = guess.data.id
-        await s.from('counterparties').update({ as_third_party: true, ...(logo_url ? { logo_url } : {}) }).eq('id', id)
+        await s.from('counterparties').update({ as_third_party: true, as_provider: true, ...(logo_url ? { logo_url } : {}) }).eq('id', id)
       } else {
-        throw new Error(error.message)
+        throw new Error(ins.error.message)
       }
     }
 
@@ -52,10 +58,10 @@ export default function NewThirdPage() {
       <h1 className="text-2xl font-semibold">Nuevo tercero</h1>
       <form action={createThird} className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div><label className="block text-sm mb-1">Logo</label><input type="file" name="logo" accept="image/*" /></div>
-        <div className="flex items-center gap-2"><input type="checkbox" name="is_company" id="is_company" /><label htmlFor="is_company">¿Empresa?</label></div>
-        <div className="md:col-span-2"><label className="block text-sm mb-1">Nick (opcional)</label><input name="nick" className="w-full border rounded px-3 py-2" /></div>
-        <div className="md:col-span-2"><label className="block text-sm mb-1">Nombre / Razón social *</label><input name="legal_name" required className="w-full border rounded px-3 py-2" /></div>
-        <div className="md:col-span-2"><label className="block text-sm mb-1">DNI / CIF</label><input name="tax_id" className="w-full border rounded px-3 py-2" /></div>
+        <label className="flex items-center gap-2"><input type="checkbox" name="is_company" /> ¿Empresa?</label>
+        <div className="md:col-span-2"><label className="block text-sm mb-1">Alias (nick)</label><input name="nick" className="w-full border rounded px-3 py-2" /></div>
+        <div className="md:col-span-2"><label className="block text-sm mb-1">Nombre legal</label><input name="legal_name" required className="w-full border rounded px-3 py-2" /></div>
+        <div className="md:col-span-2"><label className="block text-sm mb-1">DNI/CIF</label><input name="tax_id" className="w-full border rounded px-3 py-2" /></div>
         <div className="md:col-span-2"><button className="btn">Crear tercero</button></div>
       </form>
     </div>
