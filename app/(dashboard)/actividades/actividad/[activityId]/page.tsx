@@ -1,3 +1,4 @@
+// app/(dashboard)/actividades/actividad/[activityId]/page.tsx
 import Link from 'next/link'
 import ModuleCard from '@/components/ModuleCard'
 import CounterpartyPicker from '@/components/CounterpartyPicker'
@@ -32,6 +33,9 @@ export default async function ActivityDetail({
 }) {
   const s = createSupabaseServer()
 
+  // 👉 Declaramos el ID al principio para poder usarlo en todo el archivo
+  const activityId = params.activityId
+
   // Actividad
   const { data: a, error: aErr } = await s
     .from('activities')
@@ -40,7 +44,7 @@ export default async function ActivityDetail({
       venues ( id, name, photo_url, address ),
       group_companies ( id, nick, name, logo_url )
     `)
-    .eq('id', params.activityId)
+    .eq('id', activityId)
     .single()
 
   if (aErr || !a) notFound()
@@ -160,19 +164,19 @@ export default async function ActivityDetail({
     const { error } = await s
       .from('activities')
       .update({ status, date, time, municipality, province, country, capacity, pay_kind })
-      .eq('id', params.activityId)
+      .eq('id', activityId)
 
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function setCompany(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
     const company_id = String(formData.get('company_id') || '') || null
-    const { error } = await s.from('activities').update({ company_id }).eq('id', params.activityId)
+    const { error } = await s.from('activities').update({ company_id }).eq('id', activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function attachPromoter(formData: FormData) {
@@ -200,19 +204,18 @@ export default async function ActivityDetail({
       if (ins.error) throw new Error(ins.error.message)
       counterparty_id = ins.data.id
     }
-    const del = await s.from('activity_promoters').delete().eq('activity_id', params.activityId)
+    const del = await s.from('activity_promoters').delete().eq('activity_id', activityId)
     if (del.error) throw new Error(del.error.message)
     const { error } = await s
       .from('activity_promoters')
-      .insert({ activity_id: params.activityId, counterparty_id })
+      .insert({ activity_id: activityId, counterparty_id })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addIncome(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    // Tipos admitidos por el creador: fixed | variable_fixed_after | per_ticket | percent
     const kind = String(formData.get('kind') || 'fixed') as any
     const label = String(formData.get('label') || '').trim() || null
     const amount = formData.get('amount') ? Number(formData.get('amount')) : null
@@ -221,9 +224,9 @@ export default async function ActivityDetail({
 
     const { error } = await s
       .from('activity_incomes')
-      .insert({ activity_id: params.activityId, kind, label, amount, percent, rule_from_tickets })
+      .insert({ activity_id: activityId, kind, label, amount, percent, rule_from_tickets })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addAgent(formData: FormData) {
@@ -256,7 +259,7 @@ export default async function ActivityDetail({
     const { error } = await s
       .from('activity_zone_agents')
       .insert({
-        activity_id: params.activityId,
+        activity_id: activityId,
         counterparty_id,
         commission_type,
         commission_pct,
@@ -264,7 +267,7 @@ export default async function ActivityDetail({
         commission_amount,
       })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function saveEquipment(formData: FormData) {
@@ -278,7 +281,7 @@ export default async function ActivityDetail({
       await ensurePublicBucket('contracts')
       const up = await s.storage
         .from('contracts')
-        .upload(`activities/${params.activityId}/rider_${crypto.randomUUID()}.pdf`, rider, {
+        .upload(`activities/${activityId}/rider_${crypto.randomUUID()}.pdf`, rider, {
           cacheControl: '3600',
           upsert: false,
           contentType: 'application/pdf',
@@ -289,21 +292,21 @@ export default async function ActivityDetail({
     const exists = await s
       .from('activity_equipment')
       .select('id')
-      .eq('activity_id', params.activityId)
+      .eq('activity_id', activityId)
       .maybeSingle()
     if (exists.data) {
       const { error } = await s
         .from('activity_equipment')
         .update({ mode, extra_party, ...(rider_pdf_url ? { rider_pdf_url } : {}) })
-        .eq('activity_id', params.activityId)
+        .eq('activity_id', activityId)
       if (error) throw new Error(error.message)
     } else {
       const { error } = await s
         .from('activity_equipment')
-        .insert({ activity_id: params.activityId, mode, extra_party, rider_pdf_url })
+        .insert({ activity_id: activityId, mode, extra_party, rider_pdf_url })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function saveDescr(formData: FormData) {
@@ -315,21 +318,21 @@ export default async function ActivityDetail({
     const exists = await s
       .from('activity_description')
       .select('id')
-      .eq('activity_id', params.activityId)
+      .eq('activity_id', activityId)
       .maybeSingle()
     if (exists.data) {
       const { error } = await s
         .from('activity_description')
         .update({ formation, reduced_notes, show_duration })
-        .eq('activity_id', params.activityId)
+        .eq('activity_id', activityId)
       if (error) throw new Error(error.message)
     } else {
       const { error } = await s
         .from('activity_description')
-        .insert({ activity_id: params.activityId, formation, reduced_notes, show_duration })
+        .insert({ activity_id: activityId, formation, reduced_notes, show_duration })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addPromoterCost(formData: FormData) {
@@ -344,7 +347,7 @@ export default async function ActivityDetail({
     const { error } = await s
       .from('activity_promoter_costs')
       .insert({
-        activity_id: params.activityId,
+        activity_id: activityId,
         category,
         details,
         coverage,
@@ -353,7 +356,7 @@ export default async function ActivityDetail({
         refacturable,
       })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addBilling(formData: FormData) {
@@ -374,7 +377,7 @@ export default async function ActivityDetail({
     const { error } = await s
       .from('activity_billing_requests')
       .insert({
-        activity_id: params.activityId,
+        activity_id: activityId,
         direction,
         concept,
         amount,
@@ -383,7 +386,7 @@ export default async function ActivityDetail({
         counterparty_id,
       })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addLocalProduction(formData: FormData) {
@@ -398,7 +401,7 @@ export default async function ActivityDetail({
     const { error } = await s
       .from('activity_local_productions')
       .insert({
-        activity_id: params.activityId,
+        activity_id: activityId,
         provider_id,
         amount,
         details,
@@ -410,14 +413,14 @@ export default async function ActivityDetail({
     await s
       .from('activity_billing_requests')
       .insert({
-        activity_id: params.activityId,
+        activity_id: activityId,
         direction: 'received',
         concept: 'local_production',
         amount,
         due_rule: 'date',
         counterparty_id: provider_id,
       })
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function saveTech(formData: FormData) {
@@ -433,7 +436,7 @@ export default async function ActivityDetail({
     const exists = await s
       .from('activity_tech')
       .select('id')
-      .eq('activity_id', params.activityId)
+      .eq('activity_id', activityId)
       .maybeSingle()
     if (exists.data) {
       const { error } = await s
@@ -447,13 +450,13 @@ export default async function ActivityDetail({
           sound_phone,
           sound_email,
         })
-        .eq('activity_id', params.activityId)
+        .eq('activity_id', activityId)
       if (error) throw new Error(error.message)
     } else {
       const { error } = await s
         .from('activity_tech')
         .insert({
-          activity_id: params.activityId,
+          activity_id: activityId,
           tech_resp_name,
           tech_resp_phone,
           tech_resp_email,
@@ -464,7 +467,7 @@ export default async function ActivityDetail({
         })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addPartner(formData: FormData) {
@@ -475,9 +478,9 @@ export default async function ActivityDetail({
     const base_on = String(formData.get('base_on') || 'gross') as any
     const { error } = await s
       .from('activity_partners')
-      .insert({ activity_id: params.activityId, counterparty_id, pct, base_on })
+      .insert({ activity_id: activityId, counterparty_id, pct, base_on })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   // ====== Venta de entradas (server actions) ======
@@ -618,14 +621,14 @@ export default async function ActivityDetail({
     'use server'
     const s = createSupabaseServer()
     const expense_id = String(formData.get('expense_id') || '')
-    // Aquí podrías generar un token y mandar email, en esta versión sólo marcamos "requested"
+    // Aquí podrías generar un token y mandar email; en esta versión marcamos "requested"
     const { error } = await s.from('activity_expenses').update({
       payment_status: 'requested'
     }).eq('id', expense_id).eq('activity_id', activityId)
     if (error) throw new Error(error.message)
     revalidatePath(`/actividades/actividad/${activityId}`)
   }
-  const activityId = a?.id ?? params.activityId
+
   // =================== RENDER ===================
   return (
     <div className="space-y-6">
