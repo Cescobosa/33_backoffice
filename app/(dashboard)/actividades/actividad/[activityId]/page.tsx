@@ -10,6 +10,7 @@ import ActivityIncomeCreator from '@/components/ActivityIncomeCreator'
 import CompanySelect, { CompanyLite } from '@/components/CompanySelect'
 import SavedToast from '@/components/SavedToast'
 import TicketsModule from '@/components/TicketsModule'
+import TicketSalesModule from '@/components/TicketSalesModule'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -130,6 +131,10 @@ export default async function ActivityDetail({
     .from('activity_partners')
     .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick)')
     .eq('activity_id', a.id)
+
+  const { data: setup } = await s.from('activity_ticket_setup').select('*').eq('activity_id', a.id).maybeSingle()
+  const { data: typesRows } = await s.from('activity_ticket_types').select('*').eq('activity_id', a.id).order('position')
+  const { data: reportsRows } = await s.from('activity_ticket_reports').select('id, report_date, totals_sold, totals_net_revenue, created_at').eq('activity_id', a.id).order('report_date', { ascending: false })
 
   // ========= Server Actions =========
 
@@ -468,75 +473,102 @@ export default async function ActivityDetail({
     revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
-  async function saveTicketSettings(formData: FormData) {
+  async function saveTicketSetup(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const payload = {
-      enabled: formData.get('enabled') === 'on',
-      sgae_pct: Number(formData.get('sgae_pct') || 0),
-      iva_pct: Number(formData.get('iva_pct') || 21),
-      announcement_tbc: formData.get('announcement_tbc') === 'on',
-      announcement_at: String(formData.get('announcement_at') || '') || null,
-      on_sale_at: String(formData.get('on_sale_at') || '') || null,
-      vendor_name: String(formData.get('vendor_name') || '') || null,
-      sales_url: String(formData.get('sales_url') || '') || null,
+    const has_ticket_sales = formData.get('has_ticket_sales') === 'on'
+    const capacity_on_sale = String(formData.get('capacity_on_sale') || '') || null
+    const sgae_pct = Number(formData.get('sgae_pct') || 10)
+    const vat_pct = Number(formData.get('vat_pct') || 21)
+    const announcement_at = String(formData.get('announcement_at') || '') || null
+    const announcement_tbc = formData.get('announcement_tbc') === 'on'
+    const onsale_at = String(formData.get('onsale_at') || '') || null
+    const ticketing_name = String(formData.get('ticketing_name') || '') || null
+    const ticketing_url = String(formData.get('ticketing_url') || '') || null
+  
+    const existing = await s.from('activity_ticket_setup').select('activity_id').eq('activity_id', a.id).maybeSingle()
+    const row = {
+      has_ticket_sales, sgae_pct, vat_pct,
+      capacity_on_sale: capacity_on_sale ? Number(capacity_on_sale) : null,
+      announcement_at, announcement_tbc, onsale_at, ticketing_name, ticketing_url
     }
-    const up = await s.from('activity_ticket_settings')
-      .upsert({ activity_id: params.activityId, ...payload }, { onConflict: 'activity_id' })
-    if (up.error) throw new Error(up.error.message)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
-    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
-  }
-
-  async function saveTicketTypes(formData: FormData) {
-    'use server'
-    const s = createSupabaseServer()
-    const activity_id = String(formData.get('activity_id') || '')
-    const payload = JSON.parse(String(formData.get('payload') || '[]')) as any[]
-    // Borrado e inserción simple (si quieres, después lo cambiamos a upsert por id)
-    await s.from('activity_ticket_types').delete().eq('activity_id', activity_id)
-    if (payload.length) {
-      const rows = payload.map((r) => ({
-        activity_id,
-        name: String(r.name || ''),
-        quantity: Number(r.quantity || 0),
-        price_gross: Number(r.price_gross || 0),
-        invites_quota: Number(r.invites_quota || 0),
-      }))
-      const ins = await s.from('activity_ticket_types').insert(rows)
-      if (ins.error) throw new Error(ins.error.message)
+    if (existing.data) {
+      const { error } = await s.from('activity_ticket_setup').update(row).eq('activity_id', a.id)
+      if (error) throw new Error(error.message)
+    } else {
+      const { error } = await s.from('activity_ticket_setup').insert({ activity_id: a.id, ...row })
+      if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
-    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+    revalidatePath(`/actividades/actividad/${a.id}`)
   }
   
-  async function deleteTicketType(formData: FormData) {
+  async function addTicketType(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-    const id = String(formData.get('id') || '')
-    if (id) await s.from('activity_ticket_types').delete().eq('id', id)
-    revalidatePath(`/actividades/actividad/${params.activityId}`)
-    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+    const name = String(formData.get('name') || '').trim()
+    const qty = Number(formData.get('qty') || 0)
+    const price_gross = Number(formData.get('price_gross') || 0)
+    const invitations_qty = Number(formData.get('invitations_qty') || 0)
+    if (!name) throw new Error('Nombre requerido')
+  
+    // neto = (PVP / (1+IVA)) * (1 - SGAE)
+    const setup = await s.from('activity_ticket_setup').select('sgae_pct, vat_pct').eq('activity_id', a.id).maybeSingle()
+    const vat = setup.data?.vat_pct ?? 21
+    const sgae = setup.data?.sgae_pct ?? 10
+    const price_net = Math.max(0, (price_gross / (1 + vat/100)) * (1 - sgae/100))
+  
+    const { error } = await s.from('activity_ticket_types').insert({
+      activity_id: a.id, name, qty, price_gross, price_net, invitations_qty
+    })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
   }
+  
+  async function delTicketType(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const type_id = String(formData.get('type_id') || '')
+    if (!type_id) return
+    const { error } = await s.from('activity_ticket_types').delete().eq('id', type_id).eq('activity_id', a.id)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/actividades/actividad/${a.id}`)
+  }
+  
+  async function saveTicketReport(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const report_date = String(formData.get('report_date') || '') || null
+    const aggregate_only = formData.get('aggregate_only') === 'on'
+    const totals_sold = Number(formData.get('totals_sold') || 0)
+    const totals_net_revenue = Number(formData.get('totals_net_revenue') || 0)
+    const note = String(formData.get('note') || '').trim() || null
 
-  // ========= UI =========
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            Actividad {artist?.stage_name} ({a.type === 'concert' ? 'Concierto' : a.type})
-          </h1>
-          <div className="text-sm text-gray-600">
-            <Link href={`/artistas/${artist?.id}`} className="underline">
-              Ir a la ficha del artista
-            </Link>
-          </div>
-        </div>
-        <Link href={`/actividades/artista/${a.artist_id}`} className="btn-secondary">
-          Volver
-        </Link>
-      </div>
+  // Desglose por tipo si viene
+  const { data: tts } = await s.from('activity_ticket_types').select('id, name, price_net').eq('activity_id', a.id)
+  const by: Record<string, { sold: number, net: number }> = {}
+  let soldAcc = 0
+  let netAcc = 0
+  for (const t of (tts || [])) {
+    const val = formData.get(`by_${t.id}`)
+    const num = val ? Number(val) : 0
+    if (num > 0) {
+      const net = (Number(t.price_net) || 0) * num
+      by[t.name] = { sold: num, net }
+      soldAcc += num
+      netAcc += net
+    }
+  }
+  const finalSold = totals_sold || soldAcc
+  const finalNet = totals_net_revenue || netAcc
+
+  const { error } = await s.from('activity_ticket_reports').insert({
+    activity_id: a.id,
+    report_date, aggregate_only, totals_sold: finalSold, totals_net_revenue: finalNet,
+    by_type: Object.keys(by).length ? by : null, note
+  })
+  if (error) throw new Error(error.message)
+  revalidatePath(`/actividades/actividad/${a.id}`)
+}
 
       {/* DATOS BÁSICOS */}
       <ModuleCard title="Datos básicos" leftActions={<span className="badge">Editar</span>}>
@@ -589,26 +621,18 @@ export default async function ActivityDetail({
         </form>
       </ModuleCard>
       
-      <ModuleCard title="Venta de entradas" leftActions={<span className="badge">Editar</span>}>
-        <TicketsModule
-          activityId={a.id}
-          settings={{
-            enabled: !!ticketSettings?.enabled,
-            capacity: a.capacity ?? ticketSettings?.capacity ?? null,
-            sgae_pct: ticketSettings?.sgae_pct ?? 0,
-            iva_pct: ticketSettings?.iva_pct ?? 21,
-            announcement_tbc: !!ticketSettings?.announcement_tbc,
-            announcement_at: ticketSettings?.announcement_at ?? null,
-            on_sale_at: ticketSettings?.on_sale_at ?? null,
-            vendor_name: ticketSettings?.vendor_name ?? '',
-            sales_url: ticketSettings?.sales_url ?? '',
-          }}
-          rows={(ticketTypes || []) as any}
-          actionSaveSettings={saveTicketSettings}
-          actionSaveTypes={saveTicketTypes}
-          actionDeleteType={deleteTicketType}
+      <ModuleCard title="Venta de entradas">
+        <TicketSalesModule
+          setup={setup || null}
+          types={(typesRows || []) as any}
+          reports={(reportsRows || []) as any}
+          actionSaveSetup={saveTicketSetup}
+          actionAddType={addTicketType}
+          actionDelType={delTicketType}
+          actionSaveReport={saveTicketReport}
+          capacityFromActivity={a.capacity || null}
         />
-    </ModuleCard>
+      </ModuleCard>
       
       {/* Empresa del grupo con logos */}
       <ModuleCard title="Empresa del grupo">
