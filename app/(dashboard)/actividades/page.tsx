@@ -1,62 +1,66 @@
 import Link from 'next/link'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import ActivitiesMap from '@/components/ActivitiesMap'
+import ModuleCard from '@/components/ModuleCard'
+import ActivitiesMap, { ActivityForMap } from '@/components/ActivitiesMap'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-export default async function ActivitiesHome({
-  searchParams,
-}: {
-  searchParams?: { view?: 'all' | 'artists'; artistId?: string; q?: string; type?: string; past?: string }
+function todayISO() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10) }
+
+export default async function ActivitiesPage({ searchParams }: {
+  searchParams: { q?: string, type?: string, from?: string, to?: string, past?: string, artistId?: string }
 }) {
   const s = createSupabaseServer()
-  const view = (searchParams?.view as any) || 'artists'
-  const artistId = searchParams?.artistId || ''
-  const q = (searchParams?.q || '').trim()
-  const type = (searchParams?.type || '').trim()
-  const past = searchParams?.past === '1'
-  const today = new Date().toISOString().slice(0, 10)
+  const q = (searchParams.q || '').trim()
+  const type = (searchParams.type || '').trim()
+  const past = searchParams.past === '1'
+  const from = searchParams.from
+  const to = searchParams.to
+  const artistId = searchParams.artistId
 
-  // ===== artistas para selector =====
-  const { data: artists } = await s
-    .from('artists')
-    .select('id, stage_name, avatar_url')
-    .order('stage_name')
+  let qb = s.from('activities').select(`
+    id, type, status, date, municipality, province, country, artist_id, company_id,
+    lat, lng,
+    artists(id, stage_name, avatar_url),
+    group_companies(id, nick, name, logo_url)
+  `)
 
-  // ===== actividades =====
-  let query = s
-    .from('activities')
-    .select(`
-      id, type, status, date, municipality, province, country, lat, lng,
-      artists(id,stage_name,avatar_url),
-      group_companies(id,logo_url,nick,name)
-    `)
-    .order('date', { ascending: true })
-
-  if (view === 'artists' && artistId) query = query.eq('artist_id', artistId)
-  if (!past) query = query.gte('date', today)
-  if (type) query = query.eq('type', type)
-  if (q && q.length >= 2) {
-    // Filtro seguro (campos de la propia tabla)
-    query = query.or(
-      `municipality.ilike.%${q}%,province.ilike.%${q}%,country.ilike.%${q}%,type.ilike.%${q}%`
-    )
+  if (artistId) qb = qb.eq('artist_id', artistId)
+  if (type) qb = qb.eq('type', type)
+  if (past) {
+    qb = qb.lte('date', to || todayISO()).order('date', { ascending: false })
+  } else {
+    qb = qb.gte('date', from || todayISO()).order('date', { ascending: true })
+    if (to) qb = qb.lte('date', to)
   }
-  const { data: acts } = await query
+  if (q) {
+    const like = `%${q}%`
+    qb = qb.or([
+      `municipality.ilike.${like}`,
+      `province.ilike.${like}`,
+      `country.ilike.${like}`,
+      `type.ilike.${like}`,
+      `status.ilike.${like}`
+    ].join(','))
+  }
 
-  const points =
-    (acts || [])
-      .filter((a: any) => Number.isFinite(a.lat) && Number.isFinite(a.lng))
-      .map((a: any) => ({
-        id: a.id,
-        lat: a.lat,
-        lng: a.lng,
-        date: a.date,
-        status: a.status,
-        type: a.type,
-        href: `/actividades/actividad/${a.id}`,
-      })) || []
+  const { data, error } = await qb
+  if (error) throw new Error(error.message)
+  const items = data || []
+
+  const points: ActivityForMap[] = items.map((a: any) => ({
+    id: a.id,
+    lat: typeof a.lat === 'number' ? a.lat : undefined,
+    lng: typeof a.lng === 'number' ? a.lng : undefined,
+    date: a.date ?? undefined,
+    status: a.status ?? undefined,
+    type: a.type ?? undefined,
+    href: `/actividades/actividad/${a.id}`,
+  }))
+
+  const { data: typesRaw } = await s.from('activities').select('type').not('type','is',null).order('type')
+  const types = Array.from(new Set((typesRaw || []).map((r: any) => r.type).filter(Boolean)))
 
   return (
     <div className="space-y-6">
@@ -65,82 +69,60 @@ export default async function ActivitiesHome({
         <Link href="/actividades/new" className="btn">+ Nueva actividad</Link>
       </div>
 
-      {/* Filtros superiores */}
-      <form className="flex flex-wrap gap-2 items-end">
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Vista</label>
-          <select name="view" defaultValue={view} className="border rounded px-3 py-2">
-            <option value="artists">Por artista</option>
-            <option value="all">Todas</option>
-          </select>
-        </div>
+      <ModuleCard title="Mapa">
+        <ActivitiesMap points={points} />
+      </ModuleCard>
 
-        {view === 'artists' && (
+      <ModuleCard title="Listado">
+        <form className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4" method="get">
+          <div className="md:col-span-2">
+            <input name="q" defaultValue={q} placeholder="Buscar…" className="w-full border rounded px-3 py-2" />
+          </div>
           <div>
-            <label className="block text-xs text-gray-600 mb-1">Artista</label>
-            <select name="artistId" defaultValue={artistId} className="border rounded px-3 py-2">
-              <option value="">(Selecciona artista)</option>
-              {(artists || []).map((a: any) => (
-                <option key={a.id} value={a.id}>{a.stage_name}</option>
-              ))}
+            <select name="type" defaultValue={type} className="w-full border rounded px-3 py-2">
+              <option value="">Todos los tipos</option>
+              {types.map((t: string) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <label className="text-sm">Desde</label>
+            <input type="date" name="from" defaultValue={from} className="border rounded px-2 py-1 w-full" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm">Hasta</label>
+            <input type="date" name="to" defaultValue={to} className="border rounded px-2 py-1 w-full" />
+          </div>
+          <div className="md:col-span-5 flex items-center gap-2">
+            <button className="btn">Aplicar</button>
+            {past
+              ? <Link className="btn-secondary" href={{ pathname: '/actividades', query: { ...searchParams, past: undefined } }}>Ver futuras</Link>
+              : <Link className="btn-secondary" href={{ pathname: '/actividades', query: { ...searchParams, past: '1' } }}>Ver pasadas</Link>}
+          </div>
+        </form>
 
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Buscar</label>
-          <input name="q" defaultValue={q} placeholder="Ciudad, provincia, país, tipo…"
-                 className="border rounded px-3 py-2" />
+        <div className="divide-y divide-gray-200">
+          {items.map((a: any) => {
+            const art = Array.isArray(a.artists) ? a.artists[0] : a.artists
+            const comp = Array.isArray(a.group_companies) ? a.group_companies[0] : a.group_companies
+            return (
+              <Link key={a.id} href={`/actividades/actividad/${a.id}`} className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
+                <div className="flex items-center gap-3">
+                  {!artistId && (art?.avatar_url
+                    ? <img src={art.avatar_url} className="h-8 w-8 rounded-full object-cover border" alt="" />
+                    : <div className="h-8 w-8 rounded-full bg-gray-200" />)}
+                  <div className="text-sm">
+                    <div className="font-medium">{a.type} · {a.date ? new Date(a.date).toLocaleDateString() : 'Sin fecha'}</div>
+                    <div className="text-gray-600">{[a.municipality, a.province, a.country].filter(Boolean).join(', ')}</div>
+                    {comp?.id && <div className="text-xs text-gray-500 mt-1">Empresa: {comp.nick || comp.name}</div>}
+                  </div>
+                </div>
+                <span className={`badge ${String(a.status).toLowerCase()==='confirmed' ? 'badge-green' : 'badge-yellow'}`}>{a.status}</span>
+              </Link>
+            )
+          })}
+          {!items.length && <div className="text-sm text-gray-500 py-3">Sin actividades.</div>}
         </div>
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Tipo</label>
-          <select name="type" defaultValue={type} className="border rounded px-3 py-2">
-            <option value="">Todos</option>
-            <option value="concert">Concierto</option>
-            <option value="festival">Festival</option>
-            <option value="promo">Promo</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Rango</label>
-          <select name="past" defaultValue={past ? '1' : ''} className="border rounded px-3 py-2">
-            <option value="">Futuras</option>
-            <option value="1">Pasadas</option>
-          </select>
-        </div>
-
-        <button className="btn">Aplicar</button>
-      </form>
-
-      {/* Mapa sobre el listado */}
-      <ActivitiesMap points={points} height={360} />
-
-      {/* Listado */}
-      <div className="divide-y divide-gray-200 mt-4">
-        {(acts || []).map((ac: any) => (
-          <Link key={ac.id} href={`/actividades/actividad/${ac.id}`}
-                className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
-            <div>
-              <div className="font-medium">{ac.type === 'concert' ? 'Concierto' : ac.type}</div>
-              <div className="text-sm text-gray-600">
-                {statusBadge(ac.status)} · {ac.date ? new Date(ac.date).toLocaleDateString() : 'Sin fecha'} ·
-                {' '}{[ac.municipality, ac.province, ac.country].filter(Boolean).join(', ')}
-              </div>
-            </div>
-            {view === 'all' && ac.artists?.avatar_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={ac.artists.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover border" />
-            ) : null}
-          </Link>
-        ))}
-        {!acts?.length && <div className="text-sm text-gray-500 py-3">No hay actividades con estos filtros.</div>}
-      </div>
+      </ModuleCard>
     </div>
   )
-}
-
-function statusBadge(s?: string | null) {
-  if (s === 'confirmed') return 'Confirmado'
-  if (s === 'hold') return 'Reserva'
-  return 'Borrador'
 }
