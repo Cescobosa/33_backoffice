@@ -4,7 +4,6 @@ import { notFound, redirect } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import SavedToast from '@/components/SavedToast'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 
 export const dynamic = 'force-dynamic'
