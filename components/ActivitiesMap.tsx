@@ -1,7 +1,7 @@
 'use client'
-
 import { useEffect, useRef } from 'react'
 import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
 
 export type ActivityForMap = {
   id: string
@@ -13,77 +13,53 @@ export type ActivityForMap = {
   href?: string
 }
 
-export default function ActivitiesMap({
-  points,
-  height = 360,
-}: {
-  points: ActivityForMap[]
-  height?: number
-}) {
-  const el = useRef<HTMLDivElement>(null)
+export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) {
+  const mapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    let map: any
-    let L: any
-    const valid = (points || []).filter(
-      (p) => typeof p.lat === 'number' && typeof p.lng === 'number'
-    )
+    if (!mapRef.current) return
+    const el = mapRef.current
+    const map = L.map(el).setView([40.4168, -3.7038], 5) // España por defecto
 
-    if (!el.current || valid.length === 0) return
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 18,
+    }).addTo(map)
 
-    ;(async () => {
-      L = (await import('leaflet')).default
-      const icon = L.icon({
-        iconUrl:
-          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-        iconRetinaUrl:
-          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        shadowUrl:
-          'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
+    const bounds: L.LatLngBoundsExpression[] = []
+    ;(points || []).forEach((p) => {
+      if (typeof p.lat !== 'number' || typeof p.lng !== 'number') return
+      const color = (p.status || '').toLowerCase() === 'confirmed' ? 'green' : 'orange'
+      const icon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="border:2px solid ${color}; background:#fff; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap">
+                 ${p.type || 'Actividad'}${p.date ? ` · ${p.date}` : ''}
+               </div>`
       })
+      const m = L.marker([p.lat, p.lng], { icon }).addTo(map)
+      const html = `<div style="font-size:12px">
+        <div><b>${p.type ?? 'Actividad'}</b></div>
+        ${p.date ?? ''} · ${p.status ?? ''}
+        ${p.href ? `<div style="margin-top:6px"><a href="${p.href}">Abrir</a></div>` : ''}
+      </div>`
+      m.bindPopup(html)
+      bounds.push([p.lat, p.lng])
+    })
 
-      map = L.map(el.current)
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap',
-      }).addTo(map)
-
-      const latlngs = valid.map((v) => [v.lat, v.lng])
-      if (latlngs.length > 1) {
-        const bounds = L.latLngBounds(latlngs)
-        map.fitBounds(bounds.pad(0.2))
-      } else {
-        map.setView(latlngs[0], 6)
-      }
-
-      valid.forEach((p) => {
-        const m = L.marker([p.lat, p.lng], { icon }).addTo(map)
-        const html = `<div style="font-size:12px">
-          <div><b>${p.type ?? 'Actividad'}</b></div>
-          ${p.date ?? ''} · ${p.status ?? ''}
-          ${p.href ? `<div style="margin-top:6px"><a href="${p.href}">Abrir</a></div>` : ''}
-        </div>`
-        m.bindPopup(html)
-      })
-    })()
-
-    return () => {
-      if (map) map.remove()
+    if (bounds.length) {
+      const b = L.latLngBounds(bounds as any)
+      map.fitBounds(b.pad(0.2))
     }
+
+    return () => { map.remove() }
   }, [points])
 
-  const validCount = (points || []).filter(
-    (p) => typeof p.lat === 'number' && typeof p.lng === 'number'
-  ).length
+  const validCount = (points || []).filter(p => typeof p.lat === 'number' && typeof p.lng === 'number').length
 
-  if (!validCount) {
-    return (
-      <div className="text-sm text-gray-500">
-        No hay actividades con coordenadas para mostrar en el mapa.
-      </div>
-    )
-  }
-
-  return <div ref={el} style={{ height }} className="rounded border" />
+  return (
+    <div className="border rounded">
+      <div ref={mapRef} style={{ height: 360 }} />
+      {!validCount && <div className="p-2 text-xs text-gray-500">No hay ubicaciones con coordenadas.</div>}
+    </div>
+  )
 }
