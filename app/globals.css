@@ -4,6 +4,7 @@
 
 :root { color-scheme: light; }
 
+/* Botones corporativos */
 .btn {
   @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-white font-medium transition;
   background-color: #d42842;
@@ -13,9 +14,21 @@
 .btn-secondary {
   @apply inline-flex items-center justify-center rounded-md px-3 py-2 border border-gray-300 text-gray-800;
 }
+
+/* Badges de estado */
 .badge { @apply text-xs px-2 py-1 rounded; }
 .badge-green { @apply bg-green-100 text-green-800; }
 .badge-red { @apply bg-red-100 text-red-800; }
 .badge-yellow { @apply bg-yellow-100 text-yellow-800; }
 
+/* Título de módulo */
 .module-title { color: #008aa4; }
+
+/* Tabs principales y sub-tabs (diferenciación visual) */
+.tabs-main a { @apply px-3 py-2 text-sm rounded-t-md; }
+.tabs-main a[data-active="true"] { @apply bg-white border border-gray-200 border-b-0; }
+.tabs-main a[data-active="false"] { @apply text-gray-600 hover:bg-gray-50; }
+
+.tabs-sub a { @apply px-2 py-1 text-xs rounded; }
+.tabs-sub a[data-active="true"] { @apply bg-gray-100 border border-gray-200; }
+.tabs-sub a[data-active="false"] { @apply text-gray-600 hover:bg-gray-50; }
