@@ -63,7 +63,7 @@ export default async function ActivityDetail({
   const { data: promoterLink } = await s
     .from('activity_promoters')
     .select('id, counterparty_id, counterparties(id,legal_name,nick,logo_url)')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .maybeSingle()
   const promoterCp = one<Counterparty>(promoterLink?.counterparties as any)
 
@@ -71,7 +71,7 @@ export default async function ActivityDetail({
   const { data: incomes } = await s
     .from('activity_incomes')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .order('created_at')
 
   const { data: agents } = await s
@@ -79,61 +79,61 @@ export default async function ActivityDetail({
     .select(
       'id, counterparty_id, commission_type, commission_pct, commission_base, commission_amount, counterparties(id,legal_name,nick)'
     )
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
 
   const { data: equip } = await s
     .from('activity_equipment')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .maybeSingle()
 
   const { data: descr } = await s
     .from('activity_description')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .maybeSingle()
 
   const { data: costs } = await s
     .from('activity_promoter_costs')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
 
   const { data: bills } = await s
     .from('activity_billing_requests')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .order('created_at')
 
   const { data: locals } = await s
     .from('activity_local_productions')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
 
   const { data: tech } = await s
     .from('activity_tech')
     .select('*')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .maybeSingle()
 
   const { data: partners } = await s
     .from('activity_partners')
     .select('id, counterparty_id, pct, base_on, counterparties(id,legal_name,nick)')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
 
   // ====== Venta de entradas ======
-  const { data: setup } = await s.from('activity_ticket_setup').select('*').eq('activity_id', a.id).maybeSingle()
-  const { data: typesRows } = await s.from('activity_ticket_types').select('*').eq('activity_id', a.id).order('position')
+  const { data: setup } = await s.from('activity_ticket_setup').select('*').eq('activity_id', activityId).maybeSingle()
+  const { data: typesRows } = await s.from('activity_ticket_types').select('*').eq('activity_id', activityId).order('position')
   const { data: reportsRows } = await s
     .from('activity_ticket_reports')
     .select('id, report_date, totals_sold, totals_net_revenue, created_at')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .order('report_date', { ascending: false })
 
   // ====== Bolsa de gastos (listado) ======
   const { data: expensesRows } = await s
     .from('activity_expenses')
     .select('id, kind, concept, amount_net, amount_gross, is_invoice, billing_status, payment_status, payment_method, payment_date, assumed_by, file_url, counterparty:counterparties(id,legal_name,nick,logo_url)')
-    .eq('activity_id', a.id)
+    .eq('activity_id', activityId)
     .order('created_at', { ascending: false })
 
   const groupedExpenses: Record<string, any[]> = {}
@@ -494,20 +494,20 @@ export default async function ActivityDetail({
     const ticketing_name = String(formData.get('ticketing_name') || '') || null
     const ticketing_url = String(formData.get('ticketing_url') || '') || null
 
-    const existing = await s.from('activity_ticket_setup').select('activity_id').eq('activity_id', a.id).maybeSingle()
+    const existing = await s.from('activity_ticket_setup').select('activity_id').eq('activity_id', activityId).maybeSingle()
     const row = {
       has_ticket_sales, sgae_pct, vat_pct,
       capacity_on_sale: capacity_on_sale ? Number(capacity_on_sale) : null,
       announcement_at, announcement_tbc, onsale_at, ticketing_name, ticketing_url
     }
     if (existing.data) {
-      const { error } = await s.from('activity_ticket_setup').update(row).eq('activity_id', a.id)
+      const { error } = await s.from('activity_ticket_setup').update(row).eq('activity_id', activityId)
       if (error) throw new Error(error.message)
     } else {
-      const { error } = await s.from('activity_ticket_setup').insert({ activity_id: a.id, ...row })
+      const { error } = await s.from('activity_ticket_setup').insert({ activity_id: activityId, ...row })
       if (error) throw new Error(error.message)
     }
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function addTicketType(formData: FormData) {
@@ -520,16 +520,16 @@ export default async function ActivityDetail({
     if (!name) throw new Error('Nombre requerido')
 
     // neto = (PVP / (1+IVA)) * (1 - SGAE)
-    const setup = await s.from('activity_ticket_setup').select('sgae_pct, vat_pct').eq('activity_id', a.id).maybeSingle()
+    const setup = await s.from('activity_ticket_setup').select('sgae_pct, vat_pct').eq('activity_id', activityId).maybeSingle()
     const vat = setup.data?.vat_pct ?? 21
     const sgae = setup.data?.sgae_pct ?? 10
     const price_net = Math.max(0, (price_gross / (1 + vat/100)) * (1 - sgae/100))
 
     const { error } = await s.from('activity_ticket_types').insert({
-      activity_id: a.id, name, qty, price_gross, price_net, invitations_qty
+      activity_id: activityId, name, qty, price_gross, price_net, invitations_qty
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function delTicketType(formData: FormData) {
@@ -537,9 +537,9 @@ export default async function ActivityDetail({
     const s = createSupabaseServer()
     const type_id = String(formData.get('type_id') || '')
     if (!type_id) return
-    const { error } = await s.from('activity_ticket_types').delete().eq('id', type_id).eq('activity_id', a.id)
+    const { error } = await s.from('activity_ticket_types').delete().eq('id', type_id).eq('activity_id', activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function saveTicketReport(formData: FormData) {
@@ -552,7 +552,7 @@ export default async function ActivityDetail({
     const note = String(formData.get('note') || '').trim() || null
 
     // Desglose por tipo si viene
-    const { data: tts } = await s.from('activity_ticket_types').select('id, name, price_net').eq('activity_id', a.id)
+    const { data: tts } = await s.from('activity_ticket_types').select('id, name, price_net').eq('activity_id', activityId)
     const by: Record<string, { sold: number, net: number }> = {}
     let soldAcc = 0
     let netAcc = 0
@@ -570,12 +570,12 @@ export default async function ActivityDetail({
     const finalNet = totals_net_revenue || netAcc
 
     const { error } = await s.from('activity_ticket_reports').insert({
-      activity_id: a.id,
+      activity_id: activityId,
       report_date, aggregate_only, totals_sold: finalSold, totals_net_revenue: finalNet,
       by_type: Object.keys(by).length ? by : null, note
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   // === Bolsa de gastos (server actions) ===
@@ -595,11 +595,11 @@ export default async function ActivityDetail({
     if (!concept) throw new Error('Concepto requerido')
 
     const { error } = await s.from('activity_expenses').insert({
-      activity_id: a.id, kind, concept, counterparty_id, is_invoice, invoice_number, invoice_date,
+      activity_id: activityId, kind, concept, counterparty_id, is_invoice, invoice_number, invoice_date,
       amount_net, amount_gross, vat_pct
     })
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function markPaid(formData: FormData) {
@@ -609,9 +609,9 @@ export default async function ActivityDetail({
     const payment_method = String(formData.get('payment_method') || 'transfer') as any
     const { error } = await s.from('activity_expenses').update({
       payment_status: 'paid', payment_method, payment_date: new Date().toISOString().slice(0,10)
-    }).eq('id', expense_id).eq('activity_id', a.id)
+    }).eq('id', expense_id).eq('activity_id', activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
 
   async function requestInvoice(formData: FormData) {
@@ -621,11 +621,11 @@ export default async function ActivityDetail({
     // Aquí podrías generar un token y mandar email, en esta versión sólo marcamos "requested"
     const { error } = await s.from('activity_expenses').update({
       payment_status: 'requested'
-    }).eq('id', expense_id).eq('activity_id', a.id)
+    }).eq('id', expense_id).eq('activity_id', activityId)
     if (error) throw new Error(error.message)
-    revalidatePath(`/actividades/actividad/${a.id}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
   }
-
+  const activityId = a?.id ?? params.activityId
   // =================== RENDER ===================
   return (
     <div className="space-y-6">
