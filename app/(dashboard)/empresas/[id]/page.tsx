@@ -4,6 +4,8 @@ import { notFound, redirect } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import SavedToast from '@/components/SavedToast'
 import { createSupabaseServer } from '@/lib/supabaseServer'
+import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -48,10 +50,37 @@ export default async function CompanyPage({
   async function deleteCompany() {
     'use server'
     const s = createSupabaseServer()
-    // desvincula actividades para no romper FK
-    await s.from('activities').update({ company_id: null }).eq('company_id', company.id)
-    const { error } = await s.from('group_companies').delete().eq('id', company.id)
-    if (error) throw new Error(error.message)
+    const companyId = String(params.id)
+  
+    // (Opcional pero recomendable) Comprueba que existe
+    const existing = await s.from('group_companies')
+      .select('id')
+      .eq('id', companyId)
+      .maybeSingle()
+    if (existing.error && existing.error.code !== 'PGRST116') {
+      throw new Error(existing.error.message)
+    }
+    if (!existing.data) {
+      // Si no existe, navega fuera o lanza 404
+      redirect('/empresas')
+      return
+    }
+  
+    // 1) Desvincula actividades para no romper la FK
+    const up = await s
+      .from('activities')
+      .update({ company_id: null })
+      .eq('company_id', companyId)
+    if (up.error) throw new Error(up.error.message)
+  
+    // 2) Borra la empresa
+    const del = await s
+      .from('group_companies')
+      .delete()
+      .eq('id', companyId)
+    if (del.error) throw new Error(del.error.message)
+  
+    revalidatePath('/empresas')
     redirect('/empresas')
   }
 
