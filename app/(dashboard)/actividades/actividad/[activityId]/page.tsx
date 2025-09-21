@@ -8,6 +8,7 @@ import { ensurePublicBucket } from '@/lib/storage'
 import ActivityIncomeCreator from '@/components/ActivityIncomeCreator'
 import CompanySelect, { CompanyLite } from '@/components/CompanySelect'
 import SavedToast from '@/components/SavedToast'
+import TicketsModule from '@/components/TicketsModule'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -41,6 +42,18 @@ export default async function ActivityDetail({
     .single()
 
   if (aErr || !a) throw new Error(aErr?.message || 'Actividad no encontrada')
+
+  const { data: ticketSettings } = await s
+    .from('activity_ticket_settings')
+    .select('enabled, capacity, sgae_pct, iva_pct, announcement_tbc, announcement_at, on_sale_at, vendor_name, sales_url')
+    .eq('activity_id', a.id)
+    .maybeSingle()
+
+  const { data: ticketTypes } = await s
+    .from('activity_ticket_types')
+    .select('id, name, quantity, price_gross, invites_quota')
+    .eq('activity_id', a.id)
+    .order('created_at')  
 
   // Artista
   const { data: artist } = await s
@@ -454,6 +467,57 @@ export default async function ActivityDetail({
     revalidatePath(`/actividades/actividad/${params.activityId}`)
   }
 
+  async function saveTicketSettings(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const payload = {
+      enabled: formData.get('enabled') === 'on',
+      sgae_pct: Number(formData.get('sgae_pct') || 0),
+      iva_pct: Number(formData.get('iva_pct') || 21),
+      announcement_tbc: formData.get('announcement_tbc') === 'on',
+      announcement_at: String(formData.get('announcement_at') || '') || null,
+      on_sale_at: String(formData.get('on_sale_at') || '') || null,
+      vendor_name: String(formData.get('vendor_name') || '') || null,
+      sales_url: String(formData.get('sales_url') || '') || null,
+    }
+    const up = await s.from('activity_ticket_settings')
+      .upsert({ activity_id: params.activityId, ...payload }, { onConflict: 'activity_id' })
+    if (up.error) throw new Error(up.error.message)
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+  }
+
+  async function saveTicketTypes(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const activity_id = String(formData.get('activity_id') || '')
+    const payload = JSON.parse(String(formData.get('payload') || '[]')) as any[]
+    // Borrado e inserción simple (si quieres, después lo cambiamos a upsert por id)
+    await s.from('activity_ticket_types').delete().eq('activity_id', activity_id)
+    if (payload.length) {
+      const rows = payload.map((r) => ({
+        activity_id,
+        name: String(r.name || ''),
+        quantity: Number(r.quantity || 0),
+        price_gross: Number(r.price_gross || 0),
+        invites_quota: Number(r.invites_quota || 0),
+      }))
+      const ins = await s.from('activity_ticket_types').insert(rows)
+      if (ins.error) throw new Error(ins.error.message)
+    }
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+  }
+  
+  async function deleteTicketType(formData: FormData) {
+    'use server'
+    const s = createSupabaseServer()
+    const id = String(formData.get('id') || '')
+    if (id) await s.from('activity_ticket_types').delete().eq('id', id)
+    revalidatePath(`/actividades/actividad/${params.activityId}`)
+    redirect(`/actividades/actividad/${params.activityId}?saved=1`)
+  }
+
   // ========= UI =========
   return (
     <div className="space-y-6">
@@ -523,7 +587,28 @@ export default async function ActivityDetail({
           </div>
         </form>
       </ModuleCard>
-
+      
+      <ModuleCard title="Venta de entradas" leftActions={<span className="badge">Editar</span>}>
+        <TicketsModule
+          activityId={a.id}
+          settings={{
+            enabled: !!ticketSettings?.enabled,
+            capacity: a.capacity ?? ticketSettings?.capacity ?? null,
+            sgae_pct: ticketSettings?.sgae_pct ?? 0,
+            iva_pct: ticketSettings?.iva_pct ?? 21,
+            announcement_tbc: !!ticketSettings?.announcement_tbc,
+            announcement_at: ticketSettings?.announcement_at ?? null,
+            on_sale_at: ticketSettings?.on_sale_at ?? null,
+            vendor_name: ticketSettings?.vendor_name ?? '',
+            sales_url: ticketSettings?.sales_url ?? '',
+          }}
+          rows={(ticketTypes || []) as any}
+          actionSaveSettings={saveTicketSettings}
+          actionSaveTypes={saveTicketTypes}
+          actionDeleteType={deleteTicketType}
+        />
+    </ModuleCard>
+      
       {/* Empresa del grupo con logos */}
       <ModuleCard title="Empresa del grupo">
         <form action={setCompany} className="max-w-lg">
