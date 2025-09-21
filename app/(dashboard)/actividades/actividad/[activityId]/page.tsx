@@ -4,6 +4,7 @@ import CounterpartyPicker from '@/components/CounterpartyPicker'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { ensurePublicBucket } from '@/lib/storage'
+import { notFound, redirect } from 'next/navigation'
 
 import ActivityIncomeCreator from '@/components/ActivityIncomeCreator'
 import CompanySelect, { CompanyLite } from '@/components/CompanySelect'
