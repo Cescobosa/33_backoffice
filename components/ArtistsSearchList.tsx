@@ -8,7 +8,7 @@ export default function ArtistsSearchList({
   archived = false,
   initial,
   basePath = '/artistas',
-  placeholder = 'Buscar artistas...'
+  placeholder = 'Buscar artistas…'
 }: {
   archived?: boolean
   initial: Artist[]
@@ -16,19 +16,24 @@ export default function ArtistsSearchList({
   placeholder?: string
 }) {
   const [q, setQ] = useState('')
-  const [items, setItems] = useState<Artist[]>(initial)
+  const [items, setItems] = useState<Artist[]>(initial || [])
 
   useEffect(() => {
-    const ctrl = new AbortController()
-    const t = setTimeout(async () => {
-      const url = `/api/search/artists?q=${encodeURIComponent(q)}&archived=${archived ? '1' : '0'}`
-      const res = await fetch(url, { signal: ctrl.signal })
-      if (res.ok) { setItems(await res.json()) }
-    }, 180)
-    return () => { clearTimeout(t); ctrl.abort() }
+    let alive = true
+    const load = async () => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (archived) params.set('archived', '1')
+      const res = await fetch(`/api/search/artists?${params.toString()}`, { cache: 'no-store' })
+      const data = await res.json()
+      if (!alive) return
+      setItems(Array.isArray(data) ? data : [])
+    }
+    load()
+    return () => { alive = false }
   }, [q, archived])
 
-  const has = useMemo(() => items?.length > 0, [items])
+  const has = useMemo(() => (items?.length ?? 0) > 0, [items])
 
   return (
     <div className="space-y-3">
@@ -39,7 +44,6 @@ export default function ArtistsSearchList({
         placeholder={placeholder}
         className="w-full border rounded px-3 py-2"
       />
-
       <div className="divide-y divide-gray-200">
         {has ? items.map(a => (
           <Link key={a.id} href={`${basePath}/${a.id}`} className="flex items-center gap-3 py-2 hover:bg-gray-50 rounded px-2">
