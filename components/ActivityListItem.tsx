@@ -21,18 +21,35 @@ function stateBadge(status?: string | null) {
   return null
 }
 
-export default function ActivityListItem({ a, href }: { a: ActivityListModel, href: string }) {
+export default function ActivityListItem({
+  a,
+  href,
+  showArtist = true,
+}: {
+  a: ActivityListModel
+  /** Ruta de destino al abrir la actividad. Si no se pasa, se usa /actividades/actividad/[id] */
+  href?: string
+  /** Mostrar avatar del artista (útil en listados globales). En fichas de artista, poner false. */
+  showArtist?: boolean
+}) {
+  const url = href ?? `/actividades/actividad/${a.id}`
+
   return (
-    <Link href={href} className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
+    <Link href={url} className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-2 px-2 rounded">
       <div className="flex items-center gap-3">
-        {a.artist?.avatar_url
-          ? <img src={a.artist.avatar_url!} className="h-8 w-8 rounded-full object-cover border" alt="" />
-          : <div className="h-8 w-8 rounded-full bg-gray-200" />
-        }
+        {showArtist && (
+          a.artist?.avatar_url
+            ? <img src={a.artist.avatar_url!} className="h-8 w-8 rounded-full object-cover border" alt="" />
+            : <div className="h-8 w-8 rounded-full bg-gray-200" />
+        )}
         <div>
-          <div className="font-medium">{a.type || 'Actividad'} {stateBadge(a.status)}</div>
+          <div className="font-medium">
+            {a.type || 'Actividad'} {stateBadge(a.status)}
+          </div>
           <div className="text-sm text-gray-600">
-            {a.date ? new Date(a.date).toLocaleDateString('es-ES') : '-'} · {[a.municipality, a.province, a.country].filter(Boolean).join(', ')}
+            {a.date ? new Date(a.date).toLocaleDateString('es-ES') : '-'}
+            {' · '}
+            {[a.municipality, a.province, a.country].filter(Boolean).join(', ')}
           </div>
         </div>
       </div>
