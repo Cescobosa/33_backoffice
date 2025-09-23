@@ -22,7 +22,8 @@ export default async function ActivitiesPage({ searchParams }: {
   let qb = s.from('activities').select(`
     id, type, status, date, municipality, province, country, lat, lng,
     artist_id,
-    artists:artist_id ( id, stage_name, avatar_url )
+    artists:artist_id ( id, stage_name, avatar_url ),
+    venues:venue_id ( name, address )
   `).order('date', { ascending: true })
 
   if (q) {
@@ -30,7 +31,9 @@ export default async function ActivitiesPage({ searchParams }: {
     qb = qb.or([
       `municipality.ilike.${like}`,
       `province.ilike.${like}`,
-      `country.ilike.${like}`
+      `country.ilike.${like}`,
+      `venues.name.ilike.${like}`,
+      `venues.address.ilike.${like}`
     ].join(','))
   }
   if (type) qb = qb.eq('type', type)
@@ -42,8 +45,12 @@ export default async function ActivitiesPage({ searchParams }: {
   const items = (data || []) as any[]
 
   const points: ActivityForMap[] = items.map((a: any) => ({
-    id: a.id, lat: a.lat, lng: a.lng, date: a.date ?? undefined, status: a.status ?? undefined, type: a.type ?? undefined,
-    href: `/actividades/actividad/${a.id}`
+    id: a.id,
+    lat: a.lat, lng: a.lng,
+    date: a.date ?? undefined,
+    status: a.status ?? undefined,
+    type: a.type ?? undefined,
+    href: `/actividades/actividad/${a.id}`,
   }))
 
   return (
