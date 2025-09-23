@@ -1,4 +1,5 @@
 import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import SavedToast from '@/components/SavedToast'
 
@@ -8,17 +9,22 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
   const showSaved = searchParams?.saved === '1'
   const s = createSupabaseServer()
 
-  const { data: departments, error: deptErr } = await s.from('departments').select('id, name').order('name')
+  const { data: departments, error: deptErr } = await s
+    .from('departments')
+    .select('id, name')
+    .order('name')
   if (deptErr) throw new Error(deptErr.message)
 
-  const { data: users } = await s
+  const { data: users, error: usersErr } = await s
     .from('profiles')
-    .select('id, full_name, nick, email, is_admin, departments:department_id(name)')
+    .select('id, full_name, nick, email, avatar_url, is_admin, departments:department_id(name)')
     .order('full_name', { ascending: true })
+  if (usersErr) throw new Error(usersErr.message)
 
   async function createUser(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
+
     const full_name = String(formData.get('full_name') || '').trim()
     const nick = String(formData.get('nick') || '').trim() || null
     const email = String(formData.get('email') || '').trim().toLowerCase()
@@ -27,33 +33,33 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
 
     if (!full_name || !email) throw new Error('Nombre y email requeridos')
 
-    // Crea usuario en Auth
+    // 1) Crear usuario en Auth (requiere SERVICE ROLE en el servidor)
     const { data: created, error: authErr } = await s.auth.admin.createUser({
-      email, email_confirm: true
+      email,
+      email_confirm: true,
     })
     if (authErr) throw new Error(authErr.message)
     const authId = created.user?.id
     if (!authId) throw new Error('No se pudo crear el usuario en Auth')
 
-    // Organización (usamos la primera)
-    const org = await s.from('organizations').select('id').limit(1).single()
-    if (org.error) throw new Error(org.error.message)
+    // 2) Vincular perfil a la organización
+    const { data: org, error: orgErr } = await s.from('organizations').select('id').limit(1).single()
+    if (orgErr) throw new Error(orgErr.message)
 
-    // Inserta perfil
     const { error: profErr } = await s.from('profiles').insert({
       id: authId,
-      organization_id: org.data.id,
+      organization_id: org.id,
       full_name,
       nick,
       email,
-      department_id,
-      is_admin
+      department_id: department_id || null,
+      is_admin,
     })
     if (profErr) throw new Error(profErr.message)
 
+    // 3) Revalidar y redirigir (sin devolver objetos al formulario)
     revalidatePath('/usuarios')
-    // redirección con query para mostrar toast
-    return { redirect: '/usuarios?saved=1' }
+    redirect('/usuarios?saved=1')
   }
 
   return (
@@ -62,6 +68,7 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Usuarios</h1>
+
         <details className="relative">
           <summary className="btn">+ Añadir usuario</summary>
           <div className="absolute right-0 mt-2 w-[28rem] border rounded bg-white shadow p-4 z-10">
@@ -82,7 +89,11 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
                 <div className="text-sm mb-1">Departamento</div>
                 <select name="department_id" className="w-full border rounded px-3 py-2">
                   <option value="">(sin departamento)</option>
-                  {(departments || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  {(departments || []).map((d: any) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
                 </select>
               </div>
               <label className="flex items-center gap-2">
@@ -90,7 +101,13 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
               </label>
               <div className="flex gap-2">
                 <button className="btn">Crear</button>
-                <button type="button" className="btn-secondary" onClick={() => (window.location.href='/usuarios')}>Cancelar</button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => (location.href = '/usuarios')}
+                >
+                  Cancelar
+                </button>
               </div>
             </form>
           </div>
@@ -101,10 +118,16 @@ export default async function UsersPage({ searchParams }: { searchParams?: { sav
         {(users || []).map((u: any) => (
           <div key={u.id} className="p-3 flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={u.avatar_url || '/avatar.png'} className="w-8 h-8 rounded-full border object-cover" alt="" />
+            <img
+              src={u.avatar_url || '/avatar.png'}
+              className="w-8 h-8 rounded-full border object-cover"
+              alt=""
+            />
             <div className="grow">
               <div className="font-medium">{u.nick || u.full_name}</div>
-              <div className="text-sm text-gray-600">{u.email} · {u.departments?.name || 'Sin depto.'}</div>
+              <div className="text-sm text-gray-600">
+                {u.email} · {u.departments?.name || 'Sin depto.'}
+              </div>
             </div>
             {u.is_admin && <span className="badge badge-green">Admin</span>}
           </div>
