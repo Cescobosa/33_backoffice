@@ -12,7 +12,7 @@ import SavedToast from '@/components/SavedToast'
 import ActivitiesMap, { ActivityForMap } from '@/components/ActivitiesMap'
 import ActivityListItem, { ActivityListModel } from '@/components/ActivityListItem'
 import ArtistPromoterModule from '@/components/ArtistPromoterModule'
-import ArtistFiscalModule from '@/components/ArtistFiscalModule'
+// 🔎 OJO: quitamos la importación de ArtistFiscalModule porque no se usa aquí
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -124,7 +124,7 @@ async function getArtistActivities({
   past?: boolean
 }): Promise<ActivityListModel[]> {
   const s = createSupabaseServer()
-  // IMPORTANTE: añadimos lat/lng para el mapa
+  // IMPORTANTE: añadimos lat/lng para el mapa (columnas existentes en la tabla).  [oai_citation:1‡Esquema_relacional_base_de_datos.pdf](file-service://file-JrcwqeeMLaaKQeptLpU6me)
   let qb = s.from('activities')
     .select('id, type, status, date, municipality, province, country, artist_id, company_id, lat, lng')
     .eq('artist_id', artistId)
@@ -800,7 +800,11 @@ export default async function ArtistDetail({
                   {isEdit && (
                     <form action={linkThird} method="post" className="border border-gray-200 rounded p-3">
                       <div className="font-medium mb-2">Añadir tercero</div>
-                      <CounterpartyPicker />
+                      {/* ✅ CORRECCIÓN: CounterpartyPicker requiere 2 props obligatorias */}
+                      <CounterpartyPicker
+                        nameCounterpartyId="counterparty_id"
+                        nameFiscalIdentityId="fiscal_identity_id"
+                      />
                       <div className="mt-3"><button className="btn">Vincular</button></div>
                     </form>
                   )}
@@ -883,8 +887,8 @@ export default async function ArtistDetail({
       )}
 
       {parentTab === 'actividades' && (
+        // ✅ CORRECCIÓN: sólo un nodo hijo en la rama condicional
         <ArtistActivitiesBlock artistId={artist.id} searchParams={searchParams} />
-        <ArtistFiscalModule artistId={params.artistId /* o a.id */} />
       )}
 
       <SavedToast show={saved} />
