@@ -11,6 +11,8 @@ import { revalidatePath } from 'next/cache'
 import SavedToast from '@/components/SavedToast'
 import ActivitiesMap, { ActivityForMap } from '@/components/ActivitiesMap'
 import ActivityListItem, { ActivityListModel } from '@/components/ActivityListItem'
+import ArtistPromoterModule from '@/components/ArtistPromoterModule'
+import ArtistFiscalModule from '@/components/ArtistFiscalModule'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -598,6 +600,7 @@ export default async function ArtistDetail({
                 </form>
               )}
             </ModuleCard>
+            <ArtistPromoterModule artistId={params.artistId /* o a.id */} />
           )}
 
           {/* SUB: PERSONALES */}
@@ -881,6 +884,7 @@ export default async function ArtistDetail({
 
       {parentTab === 'actividades' && (
         <ArtistActivitiesBlock artistId={artist.id} searchParams={searchParams} />
+        <ArtistFiscalModule artistId={params.artistId /* o a.id */} />
       )}
 
       <SavedToast show={saved} />
