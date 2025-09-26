@@ -46,11 +46,13 @@ export default async function ActivitiesPage({ searchParams }: {
 
   const points: ActivityForMap[] = items.map((a: any) => ({
     id: a.id,
-    lat: a.lat, lng: a.lng,
+    lat: a.lat != null ? Number(a.lat) : null,
+    lng: a.lng != null ? Number(a.lng) : null,
     date: a.date ?? undefined,
     status: a.status ?? undefined,
     type: a.type ?? undefined,
     href: `/actividades/actividad/${a.id}`,
+    artist_avatar: a.artists?.avatar_url || null,
   }))
 
   return (
