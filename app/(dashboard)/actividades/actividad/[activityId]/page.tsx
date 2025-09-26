@@ -46,7 +46,7 @@ export default async function ActivityPage({ params }: { params: { id: string } 
       pay_kind: String(formData.get('pay_kind') || 'pay'),
       company_id: String(formData.get('company_id') || '') || null,
     }
-    const { error } = await s.from('activities').update(payload).eq('id', a.id)
+    const { error } = await s.from('activities').update(payload).eq('activityId', a.id)
     if (error) throw new Error(error.message)
     revalidatePath(`/actividades/actividad/${a.id}`)
   }
