@@ -2,58 +2,30 @@ import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
   const q = (url.searchParams.get('q') || '').trim()
-  const bulk = url.searchParams.get('bulk') === '1'
-  const includeCompanies = url.searchParams.get('companies') === '1'
+  if (q.length < 2) return NextResponse.json({ items: [] })
 
+  const like = `%${q}%`
   const s = createSupabaseServer()
 
-  // Terceros
-  let cQ = s.from('counterparties')
-    .select('id, legal_name, nick, is_company, logo_url, tax_id, search_text')
+  const { data, error } = await s
+    .from('counterparties')
+    .select('id, nick, legal_name, logo_url, search_text')
+    .or(`nick.ilike.${like},legal_name.ilike.${like},search_text.ilike.${like}`)
     .order('legal_name', { ascending: true })
+    .limit(12)
 
-  if (q && !bulk) {
-    const like = `%${q}%`
-    cQ = cQ.or(`legal_name.ilike.${like},nick.ilike.${like},tax_id.ilike.${like},search_text.ilike.${like}`)
-  }
-  const cp = await cQ.limit(bulk ? 1000 : 100)
-  if (cp.error) return NextResponse.json({ error: cp.error.message }, { status: 400 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
 
-  // Empresas del grupo (opcional)
-  let gcRows: any[] = []
-  if (includeCompanies) {
-    const gc = await s.from('group_companies').select('id, name, nick, logo_url').order('name', { ascending: true })
-    if (gc.error) return NextResponse.json({ error: gc.error.message }, { status: 400 })
-    gcRows = gc.data || []
-  }
+  const items = (data || []).map((c) => ({
+    id: c.id,
+    label: c.nick || c.legal_name,
+    logo_url: c.logo_url,
+  }))
 
-  if (!bulk) {
-    return NextResponse.json((cp.data || []).map((c: any) => ({
-      id: c.id, legal_name: c.legal_name, nick: c.nick, is_company: c.is_company, logo_url: c.logo_url, photo_url: c.logo_url
-    })))
-  }
-
-  // Para el CounterpartyPicker (masivo para filtrar en cliente)
-  const rows = [
-    ...(cp.data || []).map((c: any) => ({
-      id: c.id,
-      label: c.nick || c.legal_name,
-      sub: c.legal_name,
-      logo_url: c.logo_url,
-      kind: 'counterparty' as const,
-    })),
-    ...gcRows.map((c: any) => ({
-      id: c.id,
-      label: c.nick || c.name,
-      sub: c.name,
-      logo_url: c.logo_url,
-      kind: 'company' as const,
-    })),
-  ]
-
-  return NextResponse.json(rows)
+  return NextResponse.json({ items })
 }
