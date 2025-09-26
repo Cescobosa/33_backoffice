@@ -5,12 +5,19 @@ import L, { Marker } from 'leaflet'
 
 export type ActivityForMap = {
   id: string
-  lat?: number | null
-  lng?: number | null
+  // Supabase devuelve numeric como string → aceptamos ambos
+  lat?: number | string | null
+  lng?: number | string | null
   date?: string | null
   type?: string | null
   status?: string | null
   href?: string
+}
+
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
 }
 
 function colorByStatus(status?: string | null) {
@@ -25,9 +32,12 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
   const mapEl = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const groupRef = useRef<L.FeatureGroup<Marker> | null>(null)
-  const [hasCoords, setHasCoords] = useState(
-    (points || []).some(p => typeof p.lat === 'number' && typeof p.lng === 'number')
+
+  // Si alguna actividad ya tiene lat/lng (aunque vengan como string), marcamos true
+  const [hasCoords, setHasCoords] = useState(() =>
+    (points || []).some(p => toNum(p.lat) != null && toNum(p.lng) != null)
   )
+  const [pending, setPending] = useState(false)
 
   // Inicializa mapa
   useEffect(() => {
@@ -46,7 +56,7 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
     return () => { map.remove() }
   }, [])
 
-  // Pinta marcas existentes
+  // Pinta las marcas que YA tienen coordenadas
   useEffect(() => {
     const map = mapRef.current
     const group = groupRef.current
@@ -55,15 +65,14 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
     group.clearLayers()
     const markers: Marker[] = []
 
-    const addMarker = (p: ActivityForMap) => {
-      if (typeof p.lat !== 'number' || typeof p.lng !== 'number') return
+    const add = (p: ActivityForMap, lat: number, lng: number) => {
       const { bg, border, text } = colorByStatus(p.status)
       const html =
-        `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap">
+        `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap; cursor:pointer">
            ${p.type || 'Actividad'}${p.date ? ` · ${new Date(p.date).toLocaleDateString('es-ES')}` : ''}
          </div>`
       const icon = L.divIcon({ className: 'custom-marker', html, iconSize: undefined })
-      const m = L.marker([p.lat, p.lng] as L.LatLngTuple, { icon })
+      const m = L.marker([lat, lng] as L.LatLngTuple, { icon })
       const popup =
         `<div style="font-size:12px">
            <div><b>${p.type ?? 'Actividad'}</b></div>
@@ -76,28 +85,32 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
       markers.push(m)
     }
 
-    (points || []).forEach(addMarker)
+    ;(points || []).forEach(p => {
+      const lat = toNum(p.lat)
+      const lng = toNum(p.lng)
+      if (lat != null && lng != null) add(p, lat, lng)
+    })
 
     if (markers.length) {
       const bounds = L.featureGroup(markers).getBounds()
       map.fitBounds(bounds.pad(0.2))
     }
-
     setHasCoords(markers.length > 0)
   }, [points])
 
-  // Geocodifica faltantes en caliente y añade marcas
+  // Geocodifica las que faltan, pinta en caliente y persiste lat/lng
   useEffect(() => {
     const map = mapRef.current
     const group = groupRef.current
     if (!map || !group) return
 
     const missing = (points || [])
-      .filter(p => !(typeof p.lat === 'number' && typeof p.lng === 'number'))
+      .filter(p => toNum(p.lat) == null || toNum(p.lng) == null)
       .map(p => p.id)
 
-    if (!missing.length) return
+    if (!missing.length) { setPending(false); return }
 
+    setPending(true)
     ;(async () => {
       try {
         const res = await fetch('/api/geocode/activities', {
@@ -105,16 +118,20 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids: missing }),
         })
+        if (!res.ok) { setPending(false); return }
+
         const updates: { id: string, lat: number, lng: number }[] = await res.json()
-        if (!Array.isArray(updates) || !updates.length) return
+        if (!Array.isArray(updates) || !updates.length) { setPending(false); return }
 
         const byId = new Map(updates.map(u => [u.id, u]))
-        const newlyAdded: Marker[] = []
+        const added: Marker[] = []
 
-        const addMarker = (p: ActivityForMap, u: { lat: number, lng: number }) => {
+        ;(points || []).forEach(p => {
+          const u = byId.get(p.id)
+          if (!u) return
           const { bg, border, text } = colorByStatus(p.status)
           const html =
-            `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap">
+            `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap; cursor:pointer">
                ${p.type || 'Actividad'}${p.date ? ` · ${new Date(p.date).toLocaleDateString('es-ES')}` : ''}
              </div>`
           const icon = L.divIcon({ className: 'custom-marker', html, iconSize: undefined })
@@ -127,21 +144,18 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
              </div>`
           m.bindPopup(popup)
           m.on('click', () => { if (p.href) window.location.href = p.href })
-          newlyAdded.push(m)
-        }
-
-        ;(points || []).forEach(p => {
-          const u = byId.get(p.id)
-          if (u) addMarker(p, u)
+          added.push(m)
         })
 
-        if (newlyAdded.length) {
-          const bounds = L.featureGroup(newlyAdded).getBounds()
+        if (added.length) {
+          const bounds = L.featureGroup(added).getBounds()
           map.fitBounds(bounds.pad(0.2))
           setHasCoords(true)
         }
       } catch {
         // Silencioso: el mapa sigue operativo aunque falle el geocoder
+      } finally {
+        setPending(false)
       }
     })()
   }, [points])
@@ -151,12 +165,17 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
   return (
     <div className="border rounded">
       <div ref={mapEl} style={{ height: 360 }} />
-      {(!hasCoords && total > 0) && (
+      {pending && (
         <div className="p-2 text-xs text-gray-500">
           Geolocalizando ubicaciones… (se guardarán para la próxima vez)
         </div>
       )}
-      {(!hasCoords && total === 0) && (
+      {!pending && !hasCoords && total > 0 && (
+        <div className="p-2 text-xs text-gray-500">
+          No hay ubicaciones con coordenadas para los filtros actuales.
+        </div>
+      )}
+      {!pending && total === 0 && (
         <div className="p-2 text-xs text-gray-500">No hay actividades para mostrar.</div>
       )}
     </div>
