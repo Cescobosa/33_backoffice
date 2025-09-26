@@ -12,6 +12,8 @@ export type ActivityForMap = {
   type?: string | null
   status?: string | null
   href?: string
+  /** Foto del artista a mostrar en el pin */
+  artist_avatar?: string | null
 }
 
 function toNum(v: unknown): number | null {
@@ -24,8 +26,41 @@ function colorByStatus(status?: string | null) {
   const s = (status || '').toLowerCase()
   if (s === 'confirmed') return { bg: '#22c55e', border: '#16a34a', text: '#052e16' } // verde
   if (s === 'cancelled') return { bg: '#ef4444', border: '#dc2626', text: '#7f1d1d' } // rojo
-  // borrador/reserva
+  // borrador / reserva
   return { bg: '#fde047', border: '#f59e0b', text: '#422006' } // amarillo
+}
+
+function typeGlyph(t?: string | null) {
+  switch ((t || '').toLowerCase()) {
+    case 'concert': return '🎵'
+    case 'promo_event': return '🎤'
+    case 'promotion': return '📢'
+    case 'record_invest': return '💿'
+    default: return '📍'
+  }
+}
+
+function markerHtml(p: ActivityForMap) {
+  const { bg, border, text } = colorByStatus(p.status)
+  const dateStr = p.date ? new Date(p.date).toLocaleDateString('es-ES') : ''
+  const glyph = typeGlyph(p.type)
+  const avatar = p.artist_avatar || '/avatar.png'
+
+  // Etiqueta (pin) con icono + fecha + foto del artista
+  return `
+    <div style="
+      display:inline-flex;align-items:center;gap:6px;
+      border:2px solid ${border}; background:${bg}; color:${text};
+      border-radius:16px; padding:4px 6px; font-size:12px;
+      box-shadow:0 1px 2px rgba(0,0,0,.15);
+      white-space:nowrap; cursor:pointer
+    ">
+      <span style="line-height:1">${glyph}</span>
+      <span style="font-size:11px;line-height:1">${dateStr}</span>
+      <img src="${avatar}" alt=""
+        style="width:20px;height:20px;border-radius:50%;
+               object-fit:cover;border:1px solid rgba(0,0,0,.15);background:#fff" />
+    </div>`
 }
 
 export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) {
@@ -33,7 +68,7 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
   const mapRef = useRef<L.Map | null>(null)
   const groupRef = useRef<L.FeatureGroup<Marker> | null>(null)
 
-  // Si alguna actividad ya tiene lat/lng (aunque vengan como string), marcamos true
+  // ¿Alguna ya trae coords (aunque vengan como string)?
   const [hasCoords, setHasCoords] = useState(() =>
     (points || []).some(p => toNum(p.lat) != null && toNum(p.lng) != null)
   )
@@ -66,12 +101,7 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
     const markers: Marker[] = []
 
     const add = (p: ActivityForMap, lat: number, lng: number) => {
-      const { bg, border, text } = colorByStatus(p.status)
-      const html =
-        `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap; cursor:pointer">
-           ${p.type || 'Actividad'}${p.date ? ` · ${new Date(p.date).toLocaleDateString('es-ES')}` : ''}
-         </div>`
-      const icon = L.divIcon({ className: 'custom-marker', html, iconSize: undefined })
+      const icon = L.divIcon({ className: 'custom-marker', html: markerHtml(p), iconSize: undefined })
       const m = L.marker([lat, lng] as L.LatLngTuple, { icon })
       const popup =
         `<div style="font-size:12px">
@@ -119,7 +149,6 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
           body: JSON.stringify({ ids: missing }),
         })
         if (!res.ok) { setPending(false); return }
-
         const updates: { id: string, lat: number, lng: number }[] = await res.json()
         if (!Array.isArray(updates) || !updates.length) { setPending(false); return }
 
@@ -129,12 +158,7 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
         ;(points || []).forEach(p => {
           const u = byId.get(p.id)
           if (!u) return
-          const { bg, border, text } = colorByStatus(p.status)
-          const html =
-            `<div style="border:2px solid ${border}; background:${bg}; color:${text}; border-radius:14px; padding:4px 6px; font-size:11px; white-space:nowrap; cursor:pointer">
-               ${p.type || 'Actividad'}${p.date ? ` · ${new Date(p.date).toLocaleDateString('es-ES')}` : ''}
-             </div>`
-          const icon = L.divIcon({ className: 'custom-marker', html, iconSize: undefined })
+          const icon = L.divIcon({ className: 'custom-marker', html: markerHtml(p), iconSize: undefined })
           const m = L.marker([u.lat, u.lng] as L.LatLngTuple, { icon }).addTo(group)
           const popup =
             `<div style="font-size:12px">
@@ -153,7 +177,7 @@ export default function ActivitiesMap({ points }: { points: ActivityForMap[] }) 
           setHasCoords(true)
         }
       } catch {
-        // Silencioso: el mapa sigue operativo aunque falle el geocoder
+        // Silencioso
       } finally {
         setPending(false)
       }
