@@ -11,7 +11,7 @@ export const runtime = 'nodejs'
 export default async function ActivityPage({ params }: { params: { activityId: string } }) {
   const s = createSupabaseServer()
 
-  const { data: a, error } = await s
+  const { data, error } = await s
     .from('activities')
     .select(`
       id, type, status, date, time,
@@ -25,7 +25,12 @@ export default async function ActivityPage({ params }: { params: { activityId: s
     .maybeSingle()
 
   if (error) throw new Error(error.message)
-  if (!a) notFound()
+  if (!data) notFound()
+
+  const a: any = data
+  // Normalizar relaciones (Supabase puede tiparlas como array)
+  const artist = Array.isArray(a.artists) ? a.artists[0] : a.artists
+  const company = Array.isArray(a.company) ? a.company[0] : a.company
 
   const { data: companies } = await s
     .from('group_companies')
@@ -56,7 +61,6 @@ export default async function ActivityPage({ params }: { params: { activityId: s
     const { error } = await s.from('activities').update(payload).eq('id', activityId)
     if (error) throw new Error(error.message)
 
-    // refresca la ficha de esta actividad
     revalidatePath(`/actividades/actividad/${activityId}`)
   }
   // ----------------------------------------------------
@@ -66,12 +70,12 @@ export default async function ActivityPage({ params }: { params: { activityId: s
       <div className="flex items-center gap-3">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={a.artists?.avatar_url || '/avatar.png'}
+          src={artist?.avatar_url || '/avatar.png'}
           className="h-10 w-10 rounded-full border object-cover"
           alt=""
         />
         <div>
-          <div className="text-xl font-semibold">{a.artists?.stage_name}</div>
+          <div className="text-xl font-semibold">{artist?.stage_name}</div>
           <div className="text-sm text-gray-600">
             {a.type || 'Actividad'} · {a.date || '—'}
           </div>
@@ -88,36 +92,26 @@ export default async function ActivityPage({ params }: { params: { activityId: s
           action={saveBasics}
           childrenView={
             <div className="grid md:grid-cols-3 gap-3 text-sm">
-              <div>
-                <span className="text-gray-500">Estado:</span> {a.status || '—'}
-              </div>
-              <div>
-                <span className="text-gray-500">Tipo:</span> {a.type}
-              </div>
-              <div>
-                <span className="text-gray-500">Fecha:</span> {a.date || '—'} {a.time ? `· ${a.time}` : ''}
-              </div>
+              <div><span className="text-gray-500">Estado:</span> {a.status || '—'}</div>
+              <div><span className="text-gray-500">Tipo:</span> {a.type}</div>
+              <div><span className="text-gray-500">Fecha:</span> {a.date || '—'} {a.time ? `· ${a.time}` : ''}</div>
               <div className="md:col-span-3">
                 <span className="text-gray-500">Lugar:</span>{' '}
                 {[a.municipality, a.province, a.country].filter(Boolean).join(', ') || '—'}
               </div>
-              <div>
-                <span className="text-gray-500">Aforo:</span> {a.capacity ?? '—'}
-              </div>
-              <div>
-                <span className="text-gray-500">Pago:</span> {a.pay_kind || '—'}
-              </div>
+              <div><span className="text-gray-500">Aforo:</span> {a.capacity ?? '—'}</div>
+              <div><span className="text-gray-500">Pago:</span> {a.pay_kind || '—'}</div>
               <div className="flex items-center gap-2">
                 <span className="text-gray-500">Empresa:</span>
-                {a.company?.logo_url && (
+                {company?.logo_url && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={a.company.logo_url}
+                    src={company.logo_url}
                     className="h-5 w-auto object-contain border rounded bg-white"
                     alt=""
                   />
                 )}
-                <span>{a.company?.nick || a.company?.name || '—'}</span>
+                <span>{company?.nick || company?.name || '—'}</span>
               </div>
             </div>
           }
@@ -219,10 +213,10 @@ export default async function ActivityPage({ params }: { params: { activityId: s
                       </option>
                     ))}
                   </select>
-                  {a.company?.logo_url && (
+                  {company?.logo_url && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={a.company.logo_url}
+                      src={company.logo_url}
                       className="h-6 w-auto object-contain border rounded bg-white"
                       alt=""
                     />
@@ -234,7 +228,7 @@ export default async function ActivityPage({ params }: { params: { activityId: s
         />
       </ModuleCard>
 
-      {/* Aquí puedes seguir añadiendo el resto de módulos de la ficha con el mismo patrón ViewEditModule */}
+      {/* Aquí podrás seguir añadiendo el resto de módulos/pestañas reutilizando <ViewEditModule /> */}
     </div>
   )
 }
