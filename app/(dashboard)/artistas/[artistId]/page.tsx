@@ -149,12 +149,7 @@ async function getLinkConfigs(linkId: string) {
 
 // ===== Actividades del artista (con filtros) =====
 async function getArtistActivities({
-  artistId,
-  q,
-  type,
-  from,
-  to,
-  past,
+  artistId, q, type, from, to, past,
 }: {
   artistId: string
   q?: string
@@ -164,48 +159,62 @@ async function getArtistActivities({
   past?: boolean
 }): Promise<ActivityListModel[]> {
   const s = createSupabaseServer()
-  // Incluimos lat/lng para el mapa (columnas existentes en la tabla activities).
-  let qb = s
-    .from('activities')
+
+  // Query A: actividades con artista como principal
+  let qa = s.from('activities')
     .select('id, type, status, date, municipality, province, country, artist_id, company_id, lat, lng')
     .eq('artist_id', artistId)
-    .order('date', { ascending: !past })
-    .order('created_at', { ascending: false })
 
-  if (type) qb = qb.eq('type', type)
+  // Filtros de tiempo
   if (past) {
     const now = new Date()
     const fromDef = new Date(now.getFullYear() - 1, 0, 1).toISOString().slice(0, 10)
-    qb = qb.lte('date', to || todayISO()).gte('date', from || fromDef)
+    qa = qa.lte('date', to || todayISO()).gte('date', from || fromDef)
   } else {
-    qb = qb.gte('date', from || todayISO())
-    if (to) qb = qb.lte('date', to)
+    qa = qa.gte('date', from || todayISO())
+    if (to) qa = qa.lte('date', to)
   }
+  if (type) qa = qa.eq('type', type)
   if (q) {
     const like = `%${q}%`
-    qb = qb.or(
-      ['municipality.ilike.' + like, 'province.ilike.' + like, 'country.ilike.' + like, 'type.ilike.' + like, 'status.ilike.' + like].join(','),
-    )
+    qa = qa.or(['municipality.ilike.'+like,'province.ilike.'+like,'country.ilike.'+like,'type.ilike.'+like,'status.ilike.'+like].join(','))
   }
+  const { data: prim, error: e1 } = await qa.order('date', { ascending: !past }).order('created_at', { ascending: false })
+  if (e1) throw new Error(e1.message)
 
-  const { data: actsRaw, error } = await qb
-  if (error) throw new Error(error.message)
-  const acts = (actsRaw || []) as ActivityRow[]
+  // Query B: actividades donde el artista está enlazado en activity_artists
+  // (usamos relación invertida activities!inner(...) para traer la fila de activities)
+  const qb = s.from('activity_artists')
+    .select('activities!inner(id, type, status, date, municipality, province, country, artist_id, company_id, lat, lng)')
+    .eq('artist_id', artistId)
 
+  const { data: linkedRows, error: e2 } = await qb
+  if (e2) throw new Error(e2.message)
+
+  const linked = (linkedRows || []).map((r: any) => r.activities)
+
+  // Unimos y deduplicamos por id
+  const byId: Record<string, ActivityRow> = {}
+  for (const a of ([...(prim || []), ...linked] as ActivityRow[])) byId[a.id] = a
+  const acts: ActivityRow[] = Object.values(byId)
+
+  // Enriquecemos con la compañía (si aplica)
   const s2 = createSupabaseServer()
-  const companyIds = Array.from(new Set(acts.map((a) => a.company_id).filter((x): x is string => !!x)))
+  const companyIds = Array.from(new Set(acts.map(a => a.company_id).filter((x): x is string => !!x)))
   const companiesRes = companyIds.length
     ? await s2.from('group_companies').select('id, name, nick, logo_url').in('id', companyIds)
     : ({ data: [] } as { data: CompanyLite[] })
-  const byCompany: Record<string, CompanyLite> = Object.fromEntries(
-    ((companiesRes.data || []) as CompanyLite[]).map((c: CompanyLite) => [c.id, c] as const),
-  )
+  const byCompany: Record<string, CompanyLite> =
+    Object.fromEntries(((companiesRes.data || []) as CompanyLite[]).map((c: CompanyLite) => [c.id, c] as const))
 
-  const full: ActivityListModel[] = acts.map((a) => ({
-    ...a,
-    artist: null, // estamos dentro de la ficha del artista
-    group_company: a.company_id ? byCompany[a.company_id] ?? null : null,
-  }))
+  const full: ActivityListModel[] = acts
+    .sort((a, b) => (past ? (new Date(b.date||'').getTime()-new Date(a.date||'').getTime())
+                         : (new Date(a.date||'').getTime()-new Date(b.date||'').getTime())))
+    .map(a => ({
+      ...a,
+      artist: null, // dentro de la ficha del artista
+      group_company: a.company_id ? byCompany[a.company_id] ?? null : null,
+    }))
   return full
 }
 async function getActivityTypes(): Promise<string[]> {
