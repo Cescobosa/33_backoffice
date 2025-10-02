@@ -13,18 +13,17 @@ type CompanyLite = { id: string; name: string | null; nick: string | null; logo_
 
 const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'concert', label: 'Concierto' },
-  { value: 'promotional_event', label: 'Evento promocional' }, // NUEVO
+  { value: 'promotional_event', label: 'Evento promocional' }, // añadido
 ]
 
 async function getFormData() {
   const s = createSupabaseServer()
-  const { data: artists } = await s
-    .from('artists')
+  const { data: artists } = await s.from('artists')
     .select('id, stage_name, avatar_url')
     .eq('status', 'active')
     .order('stage_name', { ascending: true })
-  const { data: companies } = await s
-    .from('group_companies')
+
+  const { data: companies } = await s.from('group_companies')
     .select('id, name, nick, logo_url')
     .order('name', { ascending: true })
 
@@ -41,51 +40,35 @@ export default async function NewActivityPage() {
     'use server'
     const s = createSupabaseServer()
 
-    // 1) Recogemos artistas (múltiples)
-    const selected = formData.getAll('artist_ids').map(String).filter(Boolean)
-    if (selected.length === 0) {
-      throw new Error('Selecciona al menos un artista')
-    }
-    const primaryArtistId = selected[0] // se guarda como principal en activities
+    // Artistas (multi): el primero será el "principal"
+    const artistIds = formData.getAll('artist_ids').map(String).filter(Boolean)
+    if (artistIds.length === 0) throw new Error('Selecciona al menos un artista')
+    const mainArtistId = artistIds[0]
 
-    // 2) Resto de campos básicos
-    const type = String(formData.get('type') || 'concert') // incluye 'promotional_event'
+    const type = String(formData.get('type') || 'concert')
     const status = String(formData.get('status') || 'draft')
-    const company_id = (formData.get('company_id') ? String(formData.get('company_id')) : null) as string | null
+    const company_id = formData.get('company_id') ? String(formData.get('company_id')) : null
     const date = String(formData.get('date') || '') || null
     const municipality = String(formData.get('municipality') || '').trim() || null
     const province = String(formData.get('province') || '').trim() || null
     const country = String(formData.get('country') || 'España').trim() || 'España'
 
-    // 3) Insertamos actividad con artista principal
-    const ins = await s
-      .from('activities')
-      .insert({
-        artist_id: primaryArtistId,
-        type,
-        status,
-        company_id,
-        date,
-        municipality,
-        province,
-        country,
-      })
-      .select('id')
-      .single()
+    // OJO: NO pedimos lat/lng en el formulario (aunque existen en BD).  [oai_citation:3‡Esquema_relacional_base_de_datos.pdf](file-service://file-JrcwqeeMLaaKQeptLpU6me)
+    const ins = await s.from('activities').insert({
+      artist_id: mainArtistId,
+      type, status, company_id, date, municipality, province, country,
+    }).select('id').single()
     if (ins.error) throw new Error(ins.error.message)
     const activityId = ins.data.id as string
 
-    // 4) Insertamos artistas adicionales en tabla de enlaces
-    const extras = selected.filter(id => id !== primaryArtistId)
-    if (extras.length > 0) {
-      const rows = extras.map(aid => ({ activity_id: activityId, artist_id: aid }))
-      const linkIns = await s.from('activity_artists').insert(rows)
-      if (linkIns.error) throw new Error(linkIns.error.message)
+    // Si hay co‑artistas, los guardamos en tabla de enlaces (multi‑artista)
+    const rest = artistIds.slice(1)
+    if (rest.length) {
+      await s.from('activity_artists').insert(rest.map(aid => ({ activity_id: activityId, artist_id: aid })))
     }
 
-    // 5) Revalidamos y redirigimos
     revalidatePath('/actividades')
-    if (primaryArtistId) revalidatePath(`/artistas/${primaryArtistId}`)
+    revalidatePath(`/actividades/actividad/${activityId}`)
     redirect(`/actividades/actividad/${activityId}`)
   }
 
@@ -104,13 +87,11 @@ export default async function NewActivityPage() {
           <div className="text-xs text-gray-500 mt-1">Puedes seleccionar uno o varios artistas.</div>
         </div>
 
-        {/* Tipo de actividad */}
+        {/* Tipo */}
         <div>
           <label className="block text-sm mb-1">Tipo de actividad</label>
           <select name="type" className="w-full border rounded px-3 py-2" defaultValue="concert">
-            {TYPE_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
+            {TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
 
@@ -130,20 +111,16 @@ export default async function NewActivityPage() {
           <select name="company_id" className="w-full border rounded px-3 py-2" defaultValue="">
             <option value="">(sin asignar)</option>
             {companies.map(c => (
-              <option key={c.id} value={c.id}>
-                {c.nick || c.name}
-              </option>
+              <option key={c.id} value={c.id}>{c.nick || c.name}</option>
             ))}
           </select>
         </div>
 
-        {/* Fecha */}
+        {/* Fecha y localización */}
         <div>
           <label className="block text-sm mb-1">Fecha</label>
           <input type="date" name="date" className="w-full border rounded px-3 py-2" />
         </div>
-
-        {/* Localización */}
         <div>
           <label className="block text-sm mb-1">Municipio</label>
           <input name="municipality" className="w-full border rounded px-3 py-2" />
