@@ -1,234 +1,222 @@
-import { notFound } from 'next/navigation'
+// app/(dashboard)/actividades/actividad/[activityId]/page.tsx
+import Link from 'next/link'
+import { notFound, redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import ModuleCard from '@/components/ModuleCard'
-import ViewEditModule from '@/components/ViewEditModule'
-import TabEditToolbar from '@/components/TabEditToolbar'
+import SavedToast from '@/components/SavedToast'
+import ActivityTicketsBlock from '@/components/ActivityTicketsBlock'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-export default async function ActivityPage({ params }: { params: { activityId: string } }) {
-  const s = createSupabaseServer()
+type ArtistLite = { id: string; stage_name: string; avatar_url: string | null }
+type CompanyLite = { id: string; nick: string | null; name: string | null; logo_url: string | null }
 
+type ActivityRow = {
+  id: string
+  type: string | null
+  status: 'draft'|'reserved'|'confirmed'|string | null
+  date: string | null
+  time: string | null
+  municipality: string | null
+  province: string | null
+  country: string | null
+  capacity: number | null
+  artist_id: string
+  company_id: string | null
+  artists?: ArtistLite[] | ArtistLite | null
+  group_companies?: CompanyLite[] | CompanyLite | null
+}
+
+function one<T>(x: T | T[] | null | undefined): T | null { return Array.isArray(x) ? (x[0] ?? null) : (x ?? null) }
+function badgeByStatus(s?: string | null) {
+  if (!s) return null
+  if (s === 'confirmed') return <span className="badge badge-green">Confirmado</span>
+  if (s === 'reserved') return <span className="badge badge-yellow">Reserva</span>
+  if (s === 'draft') return <span className="badge badge-yellow">Borrador</span>
+  return <span className="badge">{s}</span>
+}
+
+async function getActivityFull(id: string): Promise<{ a: ActivityRow; artist: ArtistLite | null; company: CompanyLite | null }> {
+  const s = createSupabaseServer()
   const { data, error } = await s
     .from('activities')
     .select(`
-      id, type, status, date, time,
-      municipality, province, country, capacity, pay_kind,
-      company_id, artist_id,
-      artists:artist_id (id, stage_name, avatar_url),
-      company:company_id (id, nick, name, logo_url),
-      venues:venue_id (id, name, address)
+      id, type, status, date, time, municipality, province, country, capacity,
+      artist_id, company_id,
+      artists ( id, stage_name, avatar_url ),
+      group_companies ( id, nick, name, logo_url )
     `)
-    .eq('id', params.activityId)
-    .maybeSingle()
-
+    .eq('id', id)
+    .single()
   if (error) throw new Error(error.message)
-  if (!data) notFound()
+  const a = data as unknown as ActivityRow
+  const artist = one<ArtistLite>(a.artists ?? null)
+  const company = one<CompanyLite>(a.group_companies ?? null)
+  return { a, artist, company }
+}
 
-  const a: any = data
-  // Normalizar relaciones (Supabase puede tiparlas como array)
-  const artist = Array.isArray(a.artists) ? a.artists[0] : a.artists
-  const company = Array.isArray(a.company) ? a.company[0] : a.company
+async function getCompanies(): Promise<CompanyLite[]> {
+  const s = createSupabaseServer()
+  const { data, error } = await s.from('group_companies').select('id, name, nick, logo_url').order('name', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data || []) as CompanyLite[]
+}
 
-  const { data: companies } = await s
-    .from('group_companies')
-    .select('id, nick, name, logo_url')
-    .order('name', { ascending: true })
+export default async function ActivityDetail({
+  params,
+  searchParams,
+}: {
+  params: { activityId: string }
+  searchParams: { tab?: string; mode?: string; saved?: string }
+}) {
+  const id = params.activityId
+  const tab = searchParams.tab || 'datos'
+  const isEdit = searchParams.mode === 'edit'
+  const saved = searchParams.saved === '1'
 
-  // ---------- Server Action (no captura 'a') ----------
+  const { a, artist, company } = await getActivityFull(id)
+  if (!a) notFound()
+
+  // ===== Actions (server) =====
   async function saveBasics(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
-
-    const activityId = String(formData.get('activity_id') || '')
-    if (!activityId) throw new Error('activity_id requerido')
-
-    const payload: any = {
-      date: formData.get('date') || null,
-      time: String(formData.get('time') || ''),
-      municipality: String(formData.get('municipality') || ''),
-      province: String(formData.get('province') || ''),
-      country: String(formData.get('country') || 'España'),
-      status: String(formData.get('status') || 'draft'),
-      type: String(formData.get('type') || 'concert'),
+    const patch = {
+      type: String(formData.get('type') || a.type || 'concert'),
+      status: String(formData.get('status') || a.status || 'draft') as any,
+      date: String(formData.get('date') || a.date || '') || null,
+      time: String(formData.get('time') || a.time || '') || null,
+      municipality: String(formData.get('municipality') || a.municipality || '').trim() || null,
+      province: String(formData.get('province') || a.province || '').trim() || null,
+      country: String(formData.get('country') || a.country || 'España').trim() || 'España',
       capacity: formData.get('capacity') ? Number(formData.get('capacity')) : null,
-      pay_kind: String(formData.get('pay_kind') || 'pay'),
-      company_id: String(formData.get('company_id') || '') || null,
+      company_id: formData.get('company_id') ? String(formData.get('company_id')) : null,
     }
-
-    const { error } = await s.from('activities').update(payload).eq('id', activityId)
+    const { error } = await s.from('activities').update(patch).eq('id', id)
     if (error) throw new Error(error.message)
-
-    revalidatePath(`/actividades/actividad/${activityId}`)
+    revalidatePath(`/actividades/actividad/${id}`)
+    redirect(`/actividades/actividad/${id}?tab=datos&saved=1`)
   }
-  // ----------------------------------------------------
+
+  const companies = await getCompanies()
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={artist?.avatar_url || '/avatar.png'}
-          className="h-10 w-10 rounded-full border object-cover"
-          alt=""
-        />
-        <div>
-          <div className="text-xl font-semibold">{artist?.stage_name}</div>
-          <div className="text-sm text-gray-600">
-            {a.type || 'Actividad'} · {a.date || '—'}
+      {/* Cabecera */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          {artist?.avatar_url
+            ? <img src={artist.avatar_url} className="w-10 h-10 rounded-full object-cover border" alt="" />
+            : <div className="w-10 h-10 rounded-full bg-gray-200" />}
+          <div>
+            <div className="text-2xl font-semibold">{artist?.stage_name || 'Actividad'}</div>
+            <div className="text-sm text-gray-600">
+              {a.type || 'Actividad'} · {a.municipality || ''}{a.province ? `, ${a.province}` : ''}{a.country ? `, ${a.country}` : ''}
+              {a.date ? ` · ${new Date(a.date).toLocaleDateString('es-ES')}` : ''}
+              {badgeByStatus(a.status)}
+            </div>
           </div>
+        </div>
+        <div className="flex gap-2">
+          {!isEdit ? (
+            <Link className="btn" href={{ pathname: `/actividades/actividad/${a.id}`, query: { tab, mode: 'edit' } }}>Editar ficha</Link>
+          ) : (
+            <Link className="btn-secondary" href={{ pathname: `/actividades/actividad/${a.id}`, query: { tab } }}>Terminar edición</Link>
+          )}
+          <Link className="btn-secondary" href="/actividades">Volver</Link>
         </div>
       </div>
 
-      {/* Botonera para editar/guardar todos los módulos de la pestaña */}
-      <TabEditToolbar />
+      {/* Tabs */}
+      <div className="flex gap-2">
+        <Link
+          href={{ pathname: `/actividades/actividad/${a.id}`, query: { tab: 'datos', mode: isEdit ? 'edit' : undefined } }}
+          className={`px-3 py-2 rounded-md ${tab === 'datos' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+          Datos básicos
+        </Link>
+        <Link
+          href={{ pathname: `/actividades/actividad/${a.id}`, query: { tab: 'entradas', mode: isEdit ? 'edit' : undefined } }}
+          className={`px-3 py-2 rounded-md ${tab === 'entradas' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+          Entradas
+        </Link>
+      </div>
 
-      <ModuleCard title="Datos básicos">
-        <ViewEditModule
-          title="Datos básicos"
-          isEmpty={false}
-          action={saveBasics}
-          childrenView={
-            <div className="grid md:grid-cols-3 gap-3 text-sm">
-              <div><span className="text-gray-500">Estado:</span> {a.status || '—'}</div>
-              <div><span className="text-gray-500">Tipo:</span> {a.type}</div>
-              <div><span className="text-gray-500">Fecha:</span> {a.date || '—'} {a.time ? `· ${a.time}` : ''}</div>
-              <div className="md:col-span-3">
-                <span className="text-gray-500">Lugar:</span>{' '}
-                {[a.municipality, a.province, a.country].filter(Boolean).join(', ') || '—'}
-              </div>
-              <div><span className="text-gray-500">Aforo:</span> {a.capacity ?? '—'}</div>
-              <div><span className="text-gray-500">Pago:</span> {a.pay_kind || '—'}</div>
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500">Empresa:</span>
-                {company?.logo_url && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={company.logo_url}
-                    className="h-5 w-auto object-contain border rounded bg-white"
-                    alt=""
-                  />
-                )}
-                <span>{company?.nick || company?.name || '—'}</span>
-              </div>
-            </div>
-          }
-          childrenEdit={
-            <div className="grid md:grid-cols-3 gap-3">
-              {/* ID oculto para la Server Action */}
-              <input type="hidden" name="activity_id" value={a.id} />
+      {/* Contenido por pestaña */}
+      {tab === 'datos' && (
+        <ModuleCard title="Datos básicos" leftActions={<span className="badge">{isEdit ? 'Editar' : 'Ver'}</span>}>
+          {!isEdit ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
-                <div className="text-sm mb-1">Estado</div>
-                <select
-                  name="status"
-                  defaultValue={a.status || 'draft'}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="draft">Borrador</option>
-                  <option value="hold">Reserva</option>
-                  <option value="confirmed">Confirmado</option>
-                  <option value="cancelled">Cancelado</option>
-                </select>
+                <div className="text-gray-500">Artista</div>
+                <div className="font-medium">{artist?.stage_name}</div>
               </div>
               <div>
-                <div className="text-sm mb-1">Tipo</div>
-                <select
-                  name="type"
-                  defaultValue={a.type || 'concert'}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="concert">Concierto</option>
-                  <option value="promo_event">Evento promocional</option>
-                  <option value="promotion">Promoción</option>
-                  <option value="record_invest">Inversión discográfica</option>
-                </select>
-              </div>
-              <div>
-                <div className="text-sm mb-1">Fecha</div>
-                <input
-                  type="date"
-                  name="date"
-                  defaultValue={a.date || ''}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <div className="text-sm mb-1">Hora</div>
-                <input name="time" defaultValue={a.time || ''} className="border rounded px-3 py-2 w-full" />
-              </div>
-              <div>
-                <div className="text-sm mb-1">Municipio</div>
-                <input
-                  name="municipality"
-                  defaultValue={a.municipality || ''}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <div className="text-sm mb-1">Provincia</div>
-                <input
-                  name="province"
-                  defaultValue={a.province || ''}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <div className="text-sm mb-1">País</div>
-                <input
-                  name="country"
-                  defaultValue={a.country || 'España'}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <div className="text-sm mb-1">Aforo</div>
-                <input
-                  type="number"
-                  name="capacity"
-                  defaultValue={a.capacity ?? ''}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <div className="text-sm mb-1">Pago</div>
-                <select
-                  name="pay_kind"
-                  defaultValue={a.pay_kind || 'pay'}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="pay">De pago</option>
-                  <option value="free">Gratuito</option>
-                </select>
-              </div>
-              <div className="md:col-span-3">
-                <div className="text-sm mb-1">Empresa del grupo</div>
+                <div className="text-gray-500">Empresa del grupo</div>
                 <div className="flex items-center gap-2">
-                  <select name="company_id" defaultValue={a.company_id || ''} className="border rounded px-3 py-2">
-                    <option value="">(sin empresa)</option>
-                    {(companies || []).map((c: any) => (
-                      <option key={c.id} value={c.id}>
-                        {c.nick || c.name}
-                      </option>
-                    ))}
-                  </select>
-                  {company?.logo_url && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={company.logo_url}
-                      className="h-6 w-auto object-contain border rounded bg-white"
-                      alt=""
-                    />
-                  )}
+                  {company?.logo_url && <img src={company.logo_url} className="h-6 object-contain" alt="" />}
+                  <div>{company?.nick || company?.name || '(sin asignar)'}</div>
                 </div>
               </div>
+              <div>
+                <div className="text-gray-500">Tipo</div>
+                <div className="font-medium">{a.type}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Estado</div>
+                <div className="font-medium">{badgeByStatus(a.status)}</div>
+              </div>
+              <div><div className="text-gray-500">Fecha</div><div>{a.date ? new Date(a.date).toLocaleDateString('es-ES') : '-'}</div></div>
+              <div><div className="text-gray-500">Hora</div><div>{a.time || '-'}</div></div>
+              <div><div className="text-gray-500">Municipio</div><div>{a.municipality || '-'}</div></div>
+              <div><div className="text-gray-500">Provincia</div><div>{a.province || '-'}</div></div>
+              <div><div className="text-gray-500">País</div><div>{a.country || '-'}</div></div>
+              <div><div className="text-gray-500">Aforo</div><div>{a.capacity ?? '-'}</div></div>
             </div>
-          }
-        />
-      </ModuleCard>
+          ) : (
+            <form action={saveBasics} method="post" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm mb-1">Tipo</label>
+                <select name="type" defaultValue={a.type || 'concert'} className="w-full border rounded px-3 py-2">
+                  <option value="concert">Concierto</option>
+                  <option value="promotional_event">Evento promocional</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Estado</label>
+                <select name="status" defaultValue={a.status || 'draft'} className="w-full border rounded px-3 py-2">
+                  <option value="draft">Borrador</option>
+                  <option value="reserved">Reserva</option>
+                  <option value="confirmed">Confirmado</option>
+                </select>
+              </div>
+              <div><label className="block text-sm mb-1">Fecha</label><input type="date" name="date" defaultValue={a.date ?? ''} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">Hora</label><input name="time" defaultValue={a.time ?? ''} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">Municipio</label><input name="municipality" defaultValue={a.municipality ?? ''} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">Provincia</label><input name="province" defaultValue={a.province ?? ''} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">País</label><input name="country" defaultValue={a.country ?? 'España'} className="w-full border rounded px-3 py-2" /></div>
+              <div><label className="block text-sm mb-1">Aforo</label><input name="capacity" type="number" defaultValue={a.capacity ?? ''} className="w-full border rounded px-3 py-2" /></div>
+              <div className="md:col-span-2">
+                <label className="block text-sm mb-1">Empresa del grupo</label>
+                <select name="company_id" defaultValue={a.company_id ?? ''} className="w-full border rounded px-3 py-2">
+                  <option value="">(sin asignar)</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.nick || c.name}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2"><button className="btn">Guardar cambios</button></div>
+            </form>
+          )}
+        </ModuleCard>
+      )}
 
-      {/* Aquí podrás seguir añadiendo el resto de módulos/pestañas reutilizando <ViewEditModule /> */}
+      {tab === 'entradas' && (
+        <ModuleCard title="Venta de entradas">
+          <ActivityTicketsBlock activityId={a.id} pathnameForRevalidate={`/actividades/actividad/${a.id}?tab=entradas`} />
+        </ModuleCard>
+      )}
+
+      <SavedToast show={saved} />
     </div>
   )
 }
