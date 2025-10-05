@@ -3,6 +3,7 @@ import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { revalidatePath } from 'next/cache'
 import { notFound, redirect } from 'next/navigation'
+import { MainTabs } from '@/components/Tabs'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -12,13 +13,16 @@ type GroupCompany = {
   name: string | null
   nick: string | null
   logo_url: string | null
+  cif?: string | null
+  fiscal_address?: string | null
+  iban?: string | null
 }
 
 async function fetchCompany(id: string): Promise<GroupCompany | null> {
   const s = createSupabaseServer()
   const { data, error } = await s
     .from('group_companies')
-    .select('id, name, nick, logo_url')
+    .select('id, name, nick, logo_url, cif, fiscal_address, iban')
     .eq('id', id)
     .maybeSingle()
   if (error) throw new Error(error.message)
@@ -29,7 +33,7 @@ export default async function CompanyPage({ params }: { params: { id: string } }
   const company = await fetchCompany(params.id)
   if (!company) notFound()
 
-  // Server Action sin capturar 'company' (evita el error de TS)
+  // Server Action: eliminar empresa
   async function deleteCompanyAction(formData: FormData) {
     'use server'
     const s = createSupabaseServer()
@@ -40,7 +44,6 @@ export default async function CompanyPage({ params }: { params: { id: string } }
     const up = await s.from('activities').update({ company_id: null }).eq('company_id', companyId)
     if (up.error) throw new Error(up.error.message)
 
-    // Elimina empresa del grupo
     const del = await s.from('group_companies').delete().eq('id', companyId)
     if (del.error) throw new Error(del.error.message)
 
@@ -52,12 +55,14 @@ export default async function CompanyPage({ params }: { params: { id: string } }
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {company.logo_url && (
-            // Mostrar logo horizontal (sin recorte circular)
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={company.logo_url} className="h-10 w-auto object-contain" alt="" />
-          )}
-          <h1 className="text-2xl font-semibold">{company.nick || company.name}</h1>
+          {company.logo_url
+            ? <img src={company.logo_url} className="h-10 w-auto object-contain" alt="" />
+            : <div className="h-10 w-10 bg-gray-200 rounded" />
+          }
+          <div>
+            <h1 className="text-2xl font-semibold">{company.nick || company.name}</h1>
+            {company.name && <div className="text-sm text-gray-600">{company.name}</div>}
+          </div>
         </div>
         <div className="flex gap-2">
           <form action={deleteCompanyAction}>
@@ -68,10 +73,21 @@ export default async function CompanyPage({ params }: { params: { id: string } }
         </div>
       </div>
 
+      <MainTabs
+        current="datos"
+        items={[
+          { key: 'datos', label: 'Datos', href: `/empresas/${company.id}` },
+          { key: 'actividades', label: 'Actividades', href: `/empresas/${company.id}/actividades` },
+        ]}
+      />
+
       <ModuleCard title="Datos de la empresa">
         <div className="text-sm">
-          <div><span className="text-gray-500">Nombre: </span>{company.name}</div>
-          <div><span className="text-gray-500">Alias: </span>{company.nick || '-'}</div>
+          <div><span className="text-gray-500">Nombre: </span>{company.name || '—'}</div>
+          {company.nick && <div><span className="text-gray-500">Alias: </span>{company.nick}</div>}
+          {company.cif && <div><span className="text-gray-500">CIF: </span>{company.cif}</div>}
+          {company.fiscal_address && <div><span className="text-gray-500">Dirección fiscal: </span>{company.fiscal_address}</div>}
+          {company.iban && <div><span className="text-gray-500">IBAN: </span>{company.iban}</div>}
         </div>
       </ModuleCard>
     </div>
