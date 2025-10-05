@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import { createActivityAction } from '@/app/(dashboard)/actividades/actions'
+import { createActivity } from '@/app/(dashboard)/actividades/actions'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
