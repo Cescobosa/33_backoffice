@@ -3,6 +3,8 @@ import Link from 'next/link'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { createActivity } from '@/app/(dashboard)/actividades/actions'
+import CompanySelect from '@/components/CompanySelect'
+import GroupRequired from '@/components/GroupRequired'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -21,7 +23,9 @@ async function getArtists(): Promise<ArtistLite[]> {
     .order('stage_name', { ascending: true })
   if (error) throw new Error(error.message)
   // Sólo activos al crear una actividad
-  return (data || []).filter((a: any) => a.status !== 'archived') as ArtistLite[]
+  return (data || []).filter((a: any) => a.status !== 'archived').map((a: any) => ({
+    id: a.id, stage_name: a.stage_name, avatar_url: a.avatar_url,
+  }))
 }
 
 async function getCompanies(): Promise<CompanyLite[]> {
@@ -44,13 +48,8 @@ async function getVenues(): Promise<VenueLite[]> {
   return (data || []) as VenueLite[]
 }
 
-// ==== Página ====
 export default async function NewActivityPage() {
-  const [artists, companies, venues] = await Promise.all([
-    getArtists(),
-    getCompanies(),
-    getVenues(),
-  ])
+  const [artists, companies, venues] = await Promise.all([getArtists(), getCompanies(), getVenues()])
 
   return (
     <div className="space-y-6">
@@ -71,20 +70,16 @@ export default async function NewActivityPage() {
         <form action={createActivity} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Artistas (multi selección) */}
           <div className="md:col-span-3">
-            <label className="block text-sm mb-2">Artistas (multi‑selección)</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            <label className="block text-sm mb-2">Artistas</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {artists.map((a, idx) => (
-                <label
-                  key={a.id}
-                  className="flex items-center gap-2 border rounded px-3 py-2 hover:bg-gray-50"
-                >
+                <label key={a.id} className="flex items-center gap-2 border rounded px-3 py-2 hover:bg-gray-50">
                   <input
                     type="checkbox"
                     name="artist_ids"
                     value={a.id}
-                    // "required" sólo en el primero para obligar a elegir al menos uno
-                    {...(idx === 0 ? { required: true } : {})}
                   />
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={a.avatar_url || '/avatar.png'}
                     alt=""
@@ -97,6 +92,8 @@ export default async function NewActivityPage() {
             <p className="mt-1 text-xs text-gray-500">
               Puedes vincular varios artistas a la actividad.
             </p>
+            {/* Validación: al menos un artista */}
+            <GroupRequired groupName="artist_ids" />
           </div>
 
           {/* Tipo */}
@@ -105,8 +102,8 @@ export default async function NewActivityPage() {
             <select name="type" defaultValue="concert" className="w-full border rounded px-2 py-1">
               <option value="concert">Concierto</option>
               <option value="promo_event">Evento promocional</option>
-              <option value="promotion">Promoción</option>
-              <option value="record_investment">Inversión discográfica</option>
+              <option value="promo">Promoción</option>
+              <option value="record_invest">Inversión discográfica</option>
             </select>
           </div>
 
@@ -115,30 +112,36 @@ export default async function NewActivityPage() {
             <label className="block text-sm mb-1">Estado</label>
             <select name="status" defaultValue="draft" className="w-full border rounded px-2 py-1">
               <option value="draft">Borrador</option>
-              <option value="hold">Reserva</option>
+              <option value="reserved">Reserva</option>
               <option value="confirmed">Confirmado</option>
             </select>
           </div>
 
-          {/* Fecha y hora */}
+          {/* Fecha */}
           <div>
             <label className="block text-sm mb-1">Fecha</label>
             <input type="date" name="date" className="w-full border rounded px-2 py-1" />
           </div>
+
+          {/* Hora */}
           <div>
             <label className="block text-sm mb-1">Hora</label>
-            <input name="time" placeholder="20:00" className="w-full border rounded px-2 py-1" />
+            <input name="time" className="w-full border rounded px-2 py-1" placeholder="20:00" />
           </div>
 
-          {/* Localización */}
+          {/* Municipio */}
           <div>
             <label className="block text-sm mb-1">Municipio</label>
             <input name="municipality" className="w-full border rounded px-2 py-1" />
           </div>
+
+          {/* Provincia */}
           <div>
             <label className="block text-sm mb-1">Provincia</label>
             <input name="province" className="w-full border rounded px-2 py-1" />
           </div>
+
+          {/* País */}
           <div>
             <label className="block text-sm mb-1">País</label>
             <input name="country" defaultValue="España" className="w-full border rounded px-2 py-1" />
@@ -147,12 +150,7 @@ export default async function NewActivityPage() {
           {/* Empresa del grupo */}
           <div>
             <label className="block text-sm mb-1">Empresa del grupo</label>
-            <select name="company_id" defaultValue="" className="w-full border rounded px-2 py-1">
-              <option value="">(sin empresa)</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            <CompanySelect name="company_id" companies={companies} defaultValue={null} />
           </div>
 
           {/* Recinto */}
@@ -161,9 +159,7 @@ export default async function NewActivityPage() {
             <select name="venue_id" defaultValue="" className="w-full border rounded px-2 py-1">
               <option value="">(sin recinto)</option>
               {venues.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}{v.address ? ` — ${v.address}` : ''}
-                </option>
+                <option key={v.id} value={v.id}>{v.name}</option>
               ))}
             </select>
           </div>
@@ -171,10 +167,10 @@ export default async function NewActivityPage() {
           {/* Aforo */}
           <div>
             <label className="block text-sm mb-1">Aforo</label>
-            <input type="number" name="capacity" min={0} className="w-full border rounded px-2 py-1" />
+            <input type="number" name="capacity" className="w-full border rounded px-2 py-1" />
           </div>
 
-          {/* Pago / Gratuito (de momento mantenemos pay_kind) */}
+          {/* Pago */}
           <div>
             <label className="block text-sm mb-1">Pago</label>
             <select name="pay_kind" defaultValue="pay" className="w-full border rounded px-2 py-1">
