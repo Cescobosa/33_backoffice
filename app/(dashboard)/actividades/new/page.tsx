@@ -7,49 +7,102 @@ import { createActivity } from '@/app/(dashboard)/actividades/actions'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+// ==== Tipos ligeros para selects ====
 type ArtistLite = { id: string; stage_name: string; avatar_url: string | null }
-type CompanyLite = { id: string; name: string | null }
-type VenueLite = { id: string; name: string | null }
+type CompanyLite = { id: string; name: string | null; logo_url: string | null }
+type VenueLite = { id: string; name: string | null; address: string | null }
 
-async function getSelects() {
+// ==== Cargas para los selects ====
+async function getArtists(): Promise<ArtistLite[]> {
   const s = createSupabaseServer()
-  const [artistsRes, companiesRes, venuesRes] = await Promise.all([
-    s.from('artists').select('id,stage_name,avatar_url').order('stage_name', { ascending: true }),
-    s.from('group_companies').select('id,name').order('name', { ascending: true }),
-    s.from('venues').select('id,name').order('name', { ascending: true }),
-  ])
-  return {
-    artists: (artistsRes.data || []) as ArtistLite[],
-    companies: (companiesRes.data || []) as CompanyLite[],
-    venues: (venuesRes.data || []) as VenueLite[],
-  }
+  const { data, error } = await s
+    .from('artists')
+    .select('id, stage_name, avatar_url, status')
+    .order('stage_name', { ascending: true })
+  if (error) throw new Error(error.message)
+  // Sólo activos al crear una actividad
+  return (data || []).filter((a: any) => a.status !== 'archived') as ArtistLite[]
 }
 
+async function getCompanies(): Promise<CompanyLite[]> {
+  const s = createSupabaseServer()
+  const { data, error } = await s
+    .from('group_companies')
+    .select('id, name, logo_url')
+    .order('name', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data || []) as CompanyLite[]
+}
+
+async function getVenues(): Promise<VenueLite[]> {
+  const s = createSupabaseServer()
+  const { data, error } = await s
+    .from('venues')
+    .select('id, name, address')
+    .order('name', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data || []) as VenueLite[]
+}
+
+// ==== Página ====
 export default async function NewActivityPage() {
-  const { artists, companies, venues } = await getSelects()
+  const [artists, companies, venues] = await Promise.all([
+    getArtists(),
+    getCompanies(),
+    getVenues(),
+  ])
 
   return (
     <div className="space-y-6">
+      {/* Cabecera */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Nueva actividad</h1>
-        <Link className="btn-secondary" href="/actividades">Volver</Link>
+        <div>
+          <h1 className="text-2xl font-semibold">+ Nueva actividad</h1>
+          <p className="text-sm text-gray-600">
+            Rellena los datos básicos y selecciona el/los artista(s).
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Link href="/actividades" className="btn-secondary">Cancelar</Link>
+        </div>
       </div>
 
-      <ModuleCard title="Datos básicos">
-        <form action={createActivityAction} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <ModuleCard title="Datos básicos" leftActions={<span className="badge">Crear</span>}>
+        <form action={createActivity} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Artistas (multi selección) */}
           <div className="md:col-span-3">
-            <label className="block text-sm mb-1">Artistas (multi‑selección)</label>
-            <select name="artist_ids" multiple className="w-full border rounded px-2 py-2 h-44">
-              {artists.map((a) => (
-                <option key={a.id} value={a.id}>{a.stage_name}</option>
+            <label className="block text-sm mb-2">Artistas (multi‑selección)</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {artists.map((a, idx) => (
+                <label
+                  key={a.id}
+                  className="flex items-center gap-2 border rounded px-3 py-2 hover:bg-gray-50"
+                >
+                  <input
+                    type="checkbox"
+                    name="artist_ids"
+                    value={a.id}
+                    // "required" sólo en el primero para obligar a elegir al menos uno
+                    {...(idx === 0 ? { required: true } : {})}
+                  />
+                  <img
+                    src={a.avatar_url || '/avatar.png'}
+                    alt=""
+                    className="w-8 h-8 rounded-full object-cover border"
+                  />
+                  <span className="truncate">{a.stage_name}</span>
+                </label>
               ))}
-            </select>
-            <div className="text-xs text-gray-500 mt-1">Pulsa Ctrl/Cmd para seleccionar varios.</div>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              Puedes vincular varios artistas a la actividad.
+            </p>
           </div>
 
+          {/* Tipo */}
           <div>
             <label className="block text-sm mb-1">Tipo</label>
-            <select name="type" className="w-full border rounded px-2 py-1" defaultValue="concert">
+            <select name="type" defaultValue="concert" className="w-full border rounded px-2 py-1">
               <option value="concert">Concierto</option>
               <option value="promo_event">Evento promocional</option>
               <option value="promotion">Promoción</option>
@@ -57,43 +110,44 @@ export default async function NewActivityPage() {
             </select>
           </div>
 
+          {/* Estado */}
           <div>
             <label className="block text-sm mb-1">Estado</label>
-            <select name="status" className="w-full border rounded px-2 py-1" defaultValue="draft">
+            <select name="status" defaultValue="draft" className="w-full border rounded px-2 py-1">
               <option value="draft">Borrador</option>
               <option value="hold">Reserva</option>
               <option value="confirmed">Confirmado</option>
             </select>
           </div>
 
+          {/* Fecha y hora */}
           <div>
             <label className="block text-sm mb-1">Fecha</label>
             <input type="date" name="date" className="w-full border rounded px-2 py-1" />
           </div>
-
           <div>
             <label className="block text-sm mb-1">Hora</label>
-            <input name="time" className="w-full border rounded px-2 py-1" />
+            <input name="time" placeholder="20:00" className="w-full border rounded px-2 py-1" />
           </div>
 
+          {/* Localización */}
           <div>
             <label className="block text-sm mb-1">Municipio</label>
             <input name="municipality" className="w-full border rounded px-2 py-1" />
           </div>
-
           <div>
             <label className="block text-sm mb-1">Provincia</label>
             <input name="province" className="w-full border rounded px-2 py-1" />
           </div>
-
           <div>
             <label className="block text-sm mb-1">País</label>
             <input name="country" defaultValue="España" className="w-full border rounded px-2 py-1" />
           </div>
 
+          {/* Empresa del grupo */}
           <div>
             <label className="block text-sm mb-1">Empresa del grupo</label>
-            <select name="company_id" className="w-full border rounded px-2 py-1">
+            <select name="company_id" defaultValue="" className="w-full border rounded px-2 py-1">
               <option value="">(sin empresa)</option>
               {companies.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
@@ -101,24 +155,29 @@ export default async function NewActivityPage() {
             </select>
           </div>
 
+          {/* Recinto */}
           <div>
             <label className="block text-sm mb-1">Recinto</label>
-            <select name="venue_id" className="w-full border rounded px-2 py-1">
+            <select name="venue_id" defaultValue="" className="w-full border rounded px-2 py-1">
               <option value="">(sin recinto)</option>
               {venues.map((v) => (
-                <option key={v.id} value={v.id}>{v.name}</option>
+                <option key={v.id} value={v.id}>
+                  {v.name}{v.address ? ` — ${v.address}` : ''}
+                </option>
               ))}
             </select>
           </div>
 
+          {/* Aforo */}
           <div>
             <label className="block text-sm mb-1">Aforo</label>
-            <input name="capacity" type="number" className="w-full border rounded px-2 py-1" />
+            <input type="number" name="capacity" min={0} className="w-full border rounded px-2 py-1" />
           </div>
 
+          {/* Pago / Gratuito (de momento mantenemos pay_kind) */}
           <div>
             <label className="block text-sm mb-1">Pago</label>
-            <select name="pay_kind" className="w-full border rounded px-2 py-1" defaultValue="pay">
+            <select name="pay_kind" defaultValue="pay" className="w-full border rounded px-2 py-1">
               <option value="pay">De pago</option>
               <option value="free">Gratuito</option>
             </select>
