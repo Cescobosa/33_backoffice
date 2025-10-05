@@ -3,7 +3,7 @@ import Link from 'next/link'
 import ModuleCard from '@/components/ModuleCard'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { createActivity } from '@/app/(dashboard)/actividades/actions'
-import CompanySelect from '@/components/CompanySelect'
+import CompanySelect, { type CompanyLite as CompanySelectCompany } from '@/components/CompanySelect'
 import GroupRequired from '@/components/GroupRequired'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +11,6 @@ export const runtime = 'nodejs'
 
 // ==== Tipos ligeros para selects ====
 type ArtistLite = { id: string; stage_name: string; avatar_url: string | null }
-type CompanyLite = { id: string; name: string | null; logo_url: string | null }
 type VenueLite = { id: string; name: string | null; address: string | null }
 
 // ==== Cargas para los selects ====
@@ -28,14 +27,20 @@ async function getArtists(): Promise<ArtistLite[]> {
   }))
 }
 
-async function getCompanies(): Promise<CompanyLite[]> {
+async function getCompanies(): Promise<CompanySelectCompany[]> {
   const s = createSupabaseServer()
   const { data, error } = await s
     .from('group_companies')
-    .select('id, name, logo_url')
+    .select('id, nick, name, logo_url')
     .order('name', { ascending: true })
   if (error) throw new Error(error.message)
-  return (data || []) as CompanyLite[]
+  // Aseguramos la forma exacta que espera CompanySelect
+  return (data || []).map((c: any) => ({
+    id: c.id,
+    nick: c.nick ?? null,
+    name: c.name ?? null,
+    logo_url: c.logo_url ?? null,
+  })) as CompanySelectCompany[]
 }
 
 async function getVenues(): Promise<VenueLite[]> {
@@ -72,7 +77,7 @@ export default async function NewActivityPage() {
           <div className="md:col-span-3">
             <label className="block text-sm mb-2">Artistas</label>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {artists.map((a, idx) => (
+              {artists.map((a) => (
                 <label key={a.id} className="flex items-center gap-2 border rounded px-3 py-2 hover:bg-gray-50">
                   <input
                     type="checkbox"
