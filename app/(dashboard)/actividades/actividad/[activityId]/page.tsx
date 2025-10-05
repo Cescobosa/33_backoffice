@@ -9,6 +9,10 @@ import { updateActivityBasic } from '@/app/(dashboard)/actividades/actions'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+function one<T>(x: T | T[] | null | undefined): T | null {
+  return (Array.isArray(x) ? (x[0] ?? null) : (x ?? null)) as T | null;
+}
+
 type ArtistLite = { id: string; stage_name: string; avatar_url: string | null }
 type CompanyLite = { id: string; name: string | null; logo_url: string | null }
 type VenueLite = { id: string; name: string | null; address: string | null; photo_url?: string | null }
@@ -39,13 +43,13 @@ async function getActivity(activityId: string): Promise<ActivityFull | null> {
     .from('activities')
     .select(`
       id, type, status, date, time, municipality, province, country,
-      capacity, pay_kind, company_id, venue_id,
-      company:group_companies(id,name,logo_url),
-      venue:venues(id,name,address,photo_url),
-      artist:artists!activities_artist_id_fkey(id,stage_name,avatar_url)
+      capacity, pay_kind, artist_id, company_id, venue_id,
+      artist:artists ( id, stage_name, avatar_url ),
+      company:group_companies ( id, name, nick, logo_url ),
+      venue:venues ( id, name, photo_url, address, indoor )
     `)
-    .eq('id', activityId)
-    .maybeSingle()
+    .eq('id', params.activityId)
+    .single()
 
   if (error) throw new Error(error.message)
   if (!data) return null
@@ -77,9 +81,9 @@ async function getActivity(activityId: string): Promise<ActivityFull | null> {
     country: data.country,
     capacity: data.capacity,
     pay_kind: data.pay_kind,
-    company: data.company ?? null,
-    venue: data.venue ?? null,
-    artist: data.artist ?? null,
+    company: one<CompanyLite>((data as any).company),
+    venue: one<VenueLite>((data as any).venue),
+    artist: one<ArtistLite>((data as any).artist),
     extra_artists: extra,
   }
 }
