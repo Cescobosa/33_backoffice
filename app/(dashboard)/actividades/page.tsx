@@ -11,6 +11,7 @@ export const runtime = 'nodejs'
 
 function todayISO() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10) }
 
+
 export default async function ActivitiesPage({ searchParams }: {
   searchParams: {
     q?: string; place?: string;
