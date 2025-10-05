@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation'
 import ModuleCard from '@/components/ModuleCard'
 import SavedToast from '@/components/SavedToast'
 import { createSupabaseServer } from '@/lib/supabaseServer'
-import { updateActivityBasicAction } from '@/app/(dashboard)/actividades/actions'
+import { updateActivityBasic } from '@/app/(dashboard)/actividades/actions'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
