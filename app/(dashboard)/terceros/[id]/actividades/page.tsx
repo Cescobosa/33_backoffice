@@ -139,7 +139,12 @@ export default async function CounterpartyActivitiesPage({ params, searchParams 
 
         <div className="divide-y divide-gray-200">
           {items.map((a:any) => (
-            <ActivityListItem key={a.id} a={a as ActivityListModel} url={`/actividades/actividad/${a.id}`} showArtist />
+            <ActivityListItem
+              key={a.id}
+              a={a as ActivityListModel}
+              href={`/actividades/actividad/${a.id}`}
+              showArtist
+            />
           ))}
           {!items.length && <div className="text-sm text-gray-500">Sin actividades.</div>}
         </div>
