@@ -12,6 +12,10 @@ export default async function ArtistActivitiesTabs({
   const view = (searchParams.view as 'list'|'calendar') || 'list'
   const s = createSupabaseServer()
 
+  // Avatar del artista (para pins del mapa)
+  const artistInfo = await s.from('artists').select('id, avatar_url').eq('id', artistId).maybeSingle()
+  const artistAvatar = (artistInfo.data && 'avatar_url' in artistInfo.data) ? (artistInfo.data as any).avatar_url : null
+
   if (view === 'calendar') {
     return (
       <>
@@ -51,9 +55,9 @@ export default async function ArtistActivitiesTabs({
   const points: ActivityForMap[] = items.map((a:any) => ({
     id: a.id, lat: a.lat ?? undefined, lng: a.lng ?? undefined,
     date: a.date ?? undefined, status: a.status ?? undefined, type: a.type ?? undefined,
-    href: `/actividades/actividad/${a.id}`
+    href: `/actividades/actividad/${a.id}`,
+    artist_avatar: artistAvatar
   }))
-
   const { data: typesRaw } = await s.from('activities').select('type').eq('artist_id', artistId).not('type','is',null)
   const types = Array.from(new Set((typesRaw || []).map((r:any) => r.type).filter(Boolean)))
 
