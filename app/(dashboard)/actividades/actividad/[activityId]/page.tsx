@@ -9,13 +9,15 @@ import { updateActivityBasic } from '@/app/(dashboard)/actividades/actions'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+// ===== Utils =====
 function one<T>(x: T | T[] | null | undefined): T | null {
-  return (Array.isArray(x) ? (x[0] ?? null) : (x ?? null)) as T | null;
+  return (Array.isArray(x) ? (x[0] ?? null) : (x ?? null)) as T | null
 }
 
+// ===== Tipos mínimos usados en esta página =====
 type ArtistLite = { id: string; stage_name: string; avatar_url: string | null }
 type CompanyLite = { id: string; name: string | null; logo_url: string | null }
-type VenueLite = { id: string; name: string | null; address: string | null; photo_url?: string | null }
+type VenueLite = { id: string; name: string | null; address: string | null; photo_url?: string | null; indoor?: boolean | null }
 
 type ActivityFull = {
   id: string
@@ -30,39 +32,39 @@ type ActivityFull = {
   pay_kind: string | null
   company: CompanyLite | null
   venue: VenueLite | null
-  artist: ArtistLite | null            // artista principal (FK activities.artist_id)
-  extra_artists: ArtistLite[]          // artistas adicionales (tabla intermedia)
+  artist: ArtistLite | null              // artista principal por FK activities.artist_id
+  extra_artists: ArtistLite[]            // artistas adicionales vía tabla intermedia
 }
 
+// ===== Data fetchers =====
 async function getActivity(activityId: string): Promise<ActivityFull | null> {
   const s = createSupabaseServer()
 
-  // Desambiguamos la relación con alias explícita hacia la FK activities.artist_id
-  // y traemos empresa/recinto por conveniencia. (artist_id está en el esquema).  [oai_citation:1‡Esquema_relacional_base_de_datos.pdf](file-service://file-JrcwqeeMLaaKQeptLpU6me)
+  // OJO: relación desambiguada con el nombre de la FK activities_artist_id_fkey
+  // para no chocar con la relación many-to-many de activity_artists → artists
   const { data, error } = await s
     .from('activities')
     .select(`
       id, type, status, date, time, municipality, province, country,
       capacity, pay_kind, artist_id, company_id, venue_id,
-      artist:artists ( id, stage_name, avatar_url ),
-      company:group_companies ( id, name, nick, logo_url ),
+      artist:artists!activities_artist_id_fkey ( id, stage_name, avatar_url ),
+      company:group_companies ( id, name, logo_url ),
       venue:venues ( id, name, photo_url, address, indoor )
     `)
-    .eq('id', params.activityId)
+    .eq('id', activityId)
     .single()
 
   if (error) throw new Error(error.message)
   if (!data) return null
 
-  // Artistas adicionales (si existe activity_artists)
+  // Artistas adicionales por tabla puente (si existiera)
   let extra: ArtistLite[] = []
   try {
     const { data: rows } = await s
       .from('activity_artists')
-      .select(`
-        artists ( id, stage_name, avatar_url )
-      `)
+      .select(`artists ( id, stage_name, avatar_url )`)
       .eq('activity_id', activityId)
+
     extra = (rows || [])
       .map((r: any) => r.artists)
       .filter(Boolean) as ArtistLite[]
@@ -71,16 +73,16 @@ async function getActivity(activityId: string): Promise<ActivityFull | null> {
   }
 
   return {
-    id: data.id,
-    type: data.type,
-    status: data.status,
-    date: data.date,
-    time: data.time,
-    municipality: data.municipality,
-    province: data.province,
-    country: data.country,
-    capacity: data.capacity,
-    pay_kind: data.pay_kind,
+    id: (data as any).id,
+    type: (data as any).type,
+    status: (data as any).status,
+    date: (data as any).date,
+    time: (data as any).time,
+    municipality: (data as any).municipality,
+    province: (data as any).province,
+    country: (data as any).country,
+    capacity: (data as any).capacity,
+    pay_kind: (data as any).pay_kind,
     company: one<CompanyLite>((data as any).company),
     venue: one<VenueLite>((data as any).venue),
     artist: one<ArtistLite>((data as any).artist),
@@ -100,6 +102,7 @@ async function getSelects() {
   }
 }
 
+// ===== Página =====
 export default async function ActivityPage({
   params,
   searchParams,
@@ -109,6 +112,7 @@ export default async function ActivityPage({
 }) {
   const a = await getActivity(params.activityId)
   if (!a) notFound()
+
   const { companies, venues } = await getSelects()
   const saved = searchParams.saved === '1'
 
@@ -128,7 +132,9 @@ export default async function ActivityPage({
                   alt=""
                   className="w-6 h-6 rounded-full object-cover border"
                 />
-                <Link href={`/artistas/${a.artist.id}`} className="underline">{a.artist.stage_name}</Link>
+                <Link href={`/artistas/${a.artist.id}`} className="underline">
+                  {a.artist.stage_name}
+                </Link>
               </span>
             )}
             {a.municipality && <> · {a.municipality}</>}
@@ -141,9 +147,9 @@ export default async function ActivityPage({
         </div>
       </div>
 
-      {/* Datos básicos (vista + edición por formulario) */}
+      {/* Datos básicos (edición rápida) */}
       <ModuleCard title="Datos básicos" leftActions={<span className="badge">Editar</span>}>
-        <form action={updateActivityBasicAction} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <form action={updateActivityBasic} method="post" className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <input type="hidden" name="id" value={a.id} />
           <div>
             <label className="block text-sm mb-1">Tipo</label>
@@ -187,7 +193,7 @@ export default async function ActivityPage({
             <select name="company_id" defaultValue={a.company?.id || ''} className="w-full border rounded px-2 py-1">
               <option value="">(sin empresa)</option>
               {companies.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>{c.name ?? 'Empresa'}</option>
               ))}
             </select>
           </div>
@@ -196,7 +202,7 @@ export default async function ActivityPage({
             <select name="venue_id" defaultValue={a.venue?.id || ''} className="w-full border rounded px-2 py-1">
               <option value="">(sin recinto)</option>
               {venues.map((v) => (
-                <option key={v.id} value={v.id}>{v.name}</option>
+                <option key={v.id} value={v.id}>{v.name ?? 'Recinto'}</option>
               ))}
             </select>
           </div>
@@ -215,7 +221,8 @@ export default async function ActivityPage({
             <button className="btn">Guardar cambios</button>
           </div>
         </form>
-        {/* Artistas adicionales (sólo vista) */}
+
+        {/* Artistas adicionales (solo vista) */}
         {a.extra_artists.length > 0 && (
           <div className="mt-4 text-sm text-gray-700">
             <div className="font-medium mb-1">Artistas adicionales</div>
