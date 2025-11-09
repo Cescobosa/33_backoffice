@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import ModuleCard from '@/components/ModuleCard'
 import { createVenue } from '@/app/(dashboard)/recintos/actions'
+import { redirect } from 'next/navigation'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -10,7 +11,7 @@ export default function NewVenuePage() {
   async function create(formData: FormData) {
     'use server'
     const id = await createVenue(formData)
-    return { redirect: `/recintos/${id}` }
+    redirect(`/recintos/${id}`)
   }
 
   return (
