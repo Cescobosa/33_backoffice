@@ -105,7 +105,8 @@ export default async function VenueDetailPage({ params, searchParams }: { params
             </div>
           }
           childrenEdit={
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3" encType="multipart/form-data">
+            // Nota: quitamos encType aquí; el <form> real vive dentro de ViewEditModule.
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className="block text-sm mb-1">Nombre</label>
                 <input name="name" defaultValue={v.name || ''} className="w-full border rounded px-2 py-1" />
@@ -257,7 +258,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
         </div>
       </ModuleCard>
 
-      {/* Comentarios */}
       <ModuleCard title="Comentarios">
         <div className="grid md:grid-cols-2 gap-6">
           <div>
