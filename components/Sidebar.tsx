@@ -6,6 +6,7 @@ const items = [
   { href: '/artistas',   label: 'Artistas' },
   { href: '/terceros',   label: 'Terceros' },              // Unificación de terceros/proveedores/promotores
   { href: '/empresas',   label: 'Empresas del grupo' },
+  { href: '/recintos',   label: 'Recintos' },              // NUEVA SECCIÓN
   { href: '/actividades',label: 'Actividades' },
   { href: '/entradas',   label: 'Venta de entradas' },
   { href: '/usuarios',   label: 'Usuarios' },
