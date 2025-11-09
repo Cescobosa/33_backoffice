@@ -24,9 +24,6 @@ type Venue = {
   indoor: boolean | null
   lat: number | null
   lng: number | null
-  municipality?: string | null
-  province?: string | null
-  country?: string | null
 }
 
 export default async function VenueDetailPage({ params, searchParams }: { params: { id: string }, searchParams?: { saved?: string } }) {
@@ -37,7 +34,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
   if (!data) notFound()
   const v = data as Venue
 
-  // Cargas relacionadas
   const [{ data: capacities }, { data: contacts }, { data: files }, { data: comments }] = await Promise.all([
     s.from('venue_capacities').select('id, name, capacity').eq('venue_id', v.id).order('name'),
     s.from('venue_contacts').select('id, company_name, contact_name, phone, email, role').eq('venue_id', v.id).order('company_name'),
@@ -45,7 +41,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
     s.from('venue_comments').select('id, content, created_at').eq('venue_id', v.id).order('created_at', { ascending: false }),
   ])
 
-  // Actividades históricas
   const actsRes = await s
     .from('activities')
     .select(`
@@ -66,7 +61,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
 
   return (
     <div className="space-y-6">
-      {/* Cabecera */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -79,7 +73,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
         <Link href="/recintos" className="btn-secondary">Volver</Link>
       </div>
 
-      {/* Datos básicos */}
       <ModuleCard title="Datos básicos">
         <ViewEditModule
           title="Datos del recinto"
@@ -94,7 +87,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
                 {v.website && <div><span className="text-gray-500">Web:</span> <a className="underline" href={v.website} target="_blank">{v.website}</a></div>}
               </div>
               <div>
-                {v.lat != null && v.lng != null && (<div><span className="text-gray-500">Lat/Lng:</span> {v.lat}, {v.lng}</div>)}
                 {hasMap && (
                   <div className="mt-2">
                     <iframe
@@ -113,7 +105,7 @@ export default async function VenueDetailPage({ params, searchParams }: { params
             </div>
           }
           childrenEdit={
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3" encType="multipart/form-data">
               <div>
                 <label className="block text-sm mb-1">Nombre</label>
                 <input name="name" defaultValue={v.name || ''} className="w-full border rounded px-2 py-1" />
@@ -121,26 +113,19 @@ export default async function VenueDetailPage({ params, searchParams }: { params
               <div className="md:col-span-2">
                 <label className="block text-sm mb-1">Dirección completa</label>
                 <input name="address" defaultValue={v.address || ''} className="w-full border rounded px-2 py-1" />
+                <p className="text-xs text-gray-500 mt-1">La ubicación se recalculará automáticamente si cambias la dirección.</p>
               </div>
               <div>
                 <label className="block text-sm mb-1">Web</label>
                 <input name="website" defaultValue={v.website || ''} className="w-full border rounded px-2 py-1" />
               </div>
-              <div>
-                <label className="block text-sm mb-1">Foto (URL)</label>
-                <input name="photo_url" defaultValue={v.photo_url || ''} className="w-full border rounded px-2 py-1" />
+              <div className="md:col-span-2">
+                <label className="block text-sm mb-1">Nueva foto (PNG/JPG)</label>
+                <input type="file" name="photo" accept="image/png,image/jpeg" className="w-full text-sm" />
               </div>
               <div className="flex items-center gap-2 mt-6">
                 <input id="indoor" name="indoor" type="checkbox" defaultChecked={!!v.indoor} />
                 <label htmlFor="indoor" className="text-sm">Es interior (indoor)</label>
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Latitud</label>
-                <input name="lat" defaultValue={v.lat ?? ''} className="w-full border rounded px-2 py-1" />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Longitud</label>
-                <input name="lng" defaultValue={v.lng ?? ''} className="w-full border rounded px-2 py-1" />
               </div>
             </div>
           }
@@ -301,17 +286,6 @@ export default async function VenueDetailPage({ params, searchParams }: { params
             </form>
           </div>
         </div>
-      </ModuleCard>
-
-      {/* Histórico de actividades */}
-      <ModuleCard title="Histórico de actividades en este recinto">
-        {activities.length === 0 ? (
-          <div className="text-sm text-gray-500">No hay actividades registradas para este recinto.</div>
-        ) : (
-          <ul className="divide-y">
-            {activities.map(a => <ActivityListItem key={a.id} a={a} showArtist />)}
-          </ul>
-        )}
       </ModuleCard>
 
       <SavedToast show={saved} />
