@@ -4,42 +4,108 @@
 import { revalidatePath } from 'next/cache'
 import { createSupabaseServer } from '@/lib/supabaseServer'
 import { ensurePublicBucket } from '@/lib/storage'
+import { geocodeAddress } from '@/lib/geocoding'
+
+async function uploadVenuePhoto(s: ReturnType<typeof createSupabaseServer>, venueId: string, file: File | null): Promise<string | null> {
+  if (!file || file.size === 0) return null
+  const okTypes = ['image/png', 'image/jpeg', 'image/jpg']
+  const mime = file.type?.toLowerCase() || ''
+  if (!okTypes.includes(mime)) throw new Error('La foto debe ser PNG o JPG')
+
+  await ensurePublicBucket('venues-photos')
+
+  const safeName = (file.name || 'foto.jpg').replace(/[^a-zA-Z0-9.\-_]/g, '_')
+  const path = `${venueId}/${Date.now()}_${safeName}`
+
+  const up = await s.storage.from('venues-photos').upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: mime,
+  })
+  if (up.error) throw new Error(up.error.message)
+
+  const pub = s.storage.from('venues-photos').getPublicUrl(up.data.path)
+  return pub.data.publicUrl || null
+}
 
 export async function createVenue(formData: FormData) {
   const s = createSupabaseServer()
   const name = String(formData.get('name') || '').trim()
   if (!name) throw new Error('El nombre es obligatorio')
 
-  const res = await s.from('venues').insert({
-    name,
-    address: String(formData.get('address') || '') || null,
-    indoor: formData.get('indoor') === 'on' ? true : (formData.get('indoor') === 'true' ? true : null),
-    photo_url: String(formData.get('photo_url') || '') || null,
-    website: String(formData.get('website') || '') || null,
-    lat: formData.get('lat') ? Number(formData.get('lat')) : null,
-    lng: formData.get('lng') ? Number(formData.get('lng')) : null,
-  }).select('id').single()
+  const address = String(formData.get('address') || '') || null
+  const website = String(formData.get('website') || '') || null
+  const indoor = formData.get('indoor') === 'on' || formData.get('indoor') === 'true' ? true : null
 
-  if (res.error) throw new Error(res.error.message)
+  const geo = await geocodeAddress(address)
+
+  const ins = await s.from('venues')
+    .insert({
+      name,
+      address,
+      website,
+      indoor,
+      lat: geo.lat,
+      lng: geo.lng,
+      photo_url: null, // se actualiza tras subir la foto
+    })
+    .select('id')
+    .single()
+
+  if (ins.error) throw new Error(ins.error.message)
+  const venueId = ins.data.id as string
+
+  // Foto (opcional)
+  const photo = (formData.get('photo') as File) || null
+  if (photo && photo.size > 0) {
+    const url = await uploadVenuePhoto(s, venueId, photo)
+    if (url) {
+      await s.from('venues').update({ photo_url: url }).eq('id', venueId)
+    }
+  }
 
   revalidatePath('/recintos')
-  return res.data.id as string
+  return venueId
 }
 
 export async function updateVenueBasic(venueId: string, formData: FormData) {
   const s = createSupabaseServer()
+  const nextAddress = String(formData.get('address') || '') || null
+
+  // Necesitamos saber si la dirección cambió para re-geocodificar.
+  const curr = await s.from('venues').select('address').eq('id', venueId).single()
+  if (curr.error) throw new Error(curr.error.message)
+  const addressChanged = (curr.data?.address || null) !== (nextAddress || null)
+
+  let lat: number | null | undefined = undefined
+  let lng: number | null | undefined = undefined
+  if (addressChanged) {
+    const geo = await geocodeAddress(nextAddress)
+    lat = geo.lat
+    lng = geo.lng
+  }
+
   const patch: any = {
     name: String(formData.get('name') || ''),
-    address: String(formData.get('address') || '') || null,
+    address: nextAddress,
     website: String(formData.get('website') || '') || null,
-    indoor: formData.get('indoor') === 'on' || formData.get('indoor') === 'true' ? true : (formData.get('indoor') === 'false' ? false : null),
-    lat: formData.get('lat') ? Number(formData.get('lat')) : null,
-    lng: formData.get('lng') ? Number(formData.get('lng')) : null,
-    photo_url: String(formData.get('photo_url') || '') || null,
+    indoor: formData.get('indoor') === 'on' || formData.get('indoor') === 'true' ? true : false,
+  }
+  if (addressChanged) {
+    patch.lat = lat ?? null
+    patch.lng = lng ?? null
+  }
+
+  // ¿Foto nueva?
+  const photo = (formData.get('photo') as File) || null
+  if (photo && photo.size > 0) {
+    const url = await uploadVenuePhoto(s, venueId, photo)
+    if (url) patch.photo_url = url
   }
 
   const up = await s.from('venues').update(patch).eq('id', venueId)
   if (up.error) throw new Error(up.error.message)
+
   revalidatePath(`/recintos/${venueId}`)
   revalidatePath('/recintos')
 }
@@ -100,7 +166,7 @@ export async function addVenueFile(venueId: string, formData: FormData) {
   const file = formData.get('file') as File | null
   if (!file || file.size === 0) throw new Error('Archivo requerido')
 
-  await ensurePublicBucket('venues')
+  await ensurePublicBucket('venues') // bucket de documentos
 
   const safeName = (file.name || 'documento.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_')
   const path = `${venueId}/${Date.now()}_${safeName}`
